@@ -1,73 +1,42 @@
-# Welcome to your Lovable project
+# LLM Psychometrics
 
-## Project info
+A web application for researching LLM-based personality assessment. Participants engage in a conversational chat with an LLM, which infers Big Five personality traits from the dialogue. These LLM-derived scores are then compared against a traditional self-report questionnaire (BFI) to evaluate accuracy.
 
-**URL**: https://lovable.dev/projects/ff4a614d-ea2a-4cce-9aa4-90c72f6a95fd
+Built as part of research at the University of Tartu.
 
-## How can I edit this code?
+## Tech Stack
 
-There are several ways of editing your application.
+- **Frontend:** React, TypeScript, Vite, Tailwind CSS, shadcn/ui
+- **Backend:** Supabase (database, auth, edge functions)
+- **LLM Integration:** Supabase Edge Functions for chat and personality scoring
 
-**Use Lovable**
+## Participant Flow
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/ff4a614d-ea2a-4cce-9aa4-90c72f6a95fd) and start prompting.
+1. **Consent** - Informed consent and demographic details
+2. **Chat** - Conversational session with an LLM
+3. **Questionnaire** - Standard Big Five Inventory (BFI) self-report
+4. **Results** - Side-by-side comparison of LLM-inferred vs. self-reported personality traits
+5. **Accuracy Rating** - Participant feedback on how accurate the LLM assessment felt
 
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
+## Getting Started
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+# Install dependencies
+pnpm install
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+# Copy environment variables and fill in your Supabase credentials
+cp .env.example .env
 
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
+# Start the dev server
+pnpm dev
 ```
 
-**Edit a file directly in GitHub**
+## Environment Variables
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+See [.env.example](.env.example) for required variables:
 
-**Use GitHub Codespaces**
-
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
-
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/ff4a614d-ea2a-4cce-9aa4-90c72f6a95fd) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+| Variable | Description |
+|---|---|
+| `VITE_SUPABASE_PROJECT_ID` | Supabase project ID |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase anon/public key |
+| `VITE_SUPABASE_URL` | Supabase project URL |
