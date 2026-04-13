@@ -1,0 +1,7 @@
+project_id = "vjhloavdenrsahewibtq"
+
+[functions.chat-conversation]
+verify_jwt = true
+
+[functions.score-personality-unified]
+verify_jwt = true
