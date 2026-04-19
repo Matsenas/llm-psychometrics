@@ -24,7 +24,7 @@ const Session = () => {
         // First, find the participant
         const { data: participant, error: fetchError } = await supabase
           .from("participants")
-          .select("id, respondent_id, name, user_id, disabled")
+          .select("id, respondent_id, name, user_id, disabled, assessment_type")
           .eq("respondent_id", respondentId)
           .maybeSingle();
 
@@ -51,6 +51,7 @@ const Session = () => {
               id: participant.id,
               respondent_id: participant.respondent_id,
               name: participant.name,
+              assessment_type: (participant.assessment_type as "big5" | "ecr") ?? "ecr",
             });
             const redirectPath = await checkParticipantProgress(participant.id);
             navigate(redirectPath);
@@ -88,6 +89,7 @@ const Session = () => {
           id: participant.id,
           respondent_id: participant.respondent_id,
           name: participant.name,
+          assessment_type: (participant.assessment_type as "big5" | "ecr") ?? "ecr",
         });
 
         // Check participant progress and redirect appropriately

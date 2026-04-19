@@ -2,11 +2,14 @@ import { createContext, useContext, useState, useEffect, ReactNode } from "react
 import { supabase } from "@/integrations/supabase/client";
 import { User, Session } from "@supabase/supabase-js";
 
+export type AssessmentType = "big5" | "ecr";
+
 interface Participant {
   id: string;
   respondent_id: string;
   name: string | null;
   disabled?: boolean;
+  assessment_type: AssessmentType;
 }
 
 interface ParticipantContextType {
@@ -56,7 +59,7 @@ export const ParticipantProvider = ({ children }: { children: ReactNode }) => {
         if (existingSession?.user) {
           const { data: participantData } = await supabase
             .from("participants")
-            .select("id, respondent_id, name, disabled")
+            .select("id, respondent_id, name, disabled, assessment_type")
             .eq("user_id", existingSession.user.id)
             .maybeSingle();
 
@@ -67,8 +70,12 @@ export const ParticipantProvider = ({ children }: { children: ReactNode }) => {
               setParticipantState(null);
               localStorage.removeItem(STORAGE_KEY);
             } else {
-              setParticipantState(participantData);
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(participantData));
+              const typed: Participant = {
+                ...participantData,
+                assessment_type: (participantData.assessment_type as AssessmentType) ?? "ecr",
+              };
+              setParticipantState(typed);
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(typed));
             }
           }
         } else {

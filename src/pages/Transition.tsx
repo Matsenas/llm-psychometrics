@@ -34,12 +34,37 @@ const Transition = () => {
     if (!participant) return;
 
     try {
-      // Check if scores already exist
+      if (participant.assessment_type === "ecr") {
+        const { data: existingScores } = await supabase
+          .from("attachment_scores")
+          .select("id")
+          .eq("participant_id", participant.id)
+          .eq("method", "llm")
+          .maybeSingle();
+
+        if (existingScores) {
+          console.log("Attachment scores already exist, skipping background scoring");
+          return;
+        }
+
+        console.log("Triggering background attachment scoring...");
+        supabase.functions.invoke("score-attachment-llm", {
+          body: { participantId: participant.id },
+        }).then(({ error }) => {
+          if (error) console.error("Background attachment scoring error:", error);
+          else console.log("Background attachment scoring completed successfully");
+        }).catch((err) => {
+          console.error("Background attachment scoring failed:", err);
+        });
+        return;
+      }
+
+      // Big Five path (unchanged).
       const { data: existingScores } = await supabase
-        .from('personality_scores')
-        .select('id')
-        .eq('participant_id', participant.id)
-        .eq('method', 'llm')
+        .from("personality_scores")
+        .select("id")
+        .eq("participant_id", participant.id)
+        .eq("method", "llm")
         .maybeSingle();
 
       if (existingScores) {
@@ -47,17 +72,13 @@ const Transition = () => {
         return;
       }
 
-      // Fire and forget - trigger scoring in background
       console.log("Triggering background personality scoring...");
-      supabase.functions.invoke('score-personality-unified', {
-        body: { participantId: participant.id }
-      }).then(({ data, error }) => {
-        if (error) {
-          console.error("Background scoring error:", error);
-        } else {
-          console.log("Background scoring completed successfully");
-        }
-      }).catch(err => {
+      supabase.functions.invoke("score-personality-unified", {
+        body: { participantId: participant.id },
+      }).then(({ error }) => {
+        if (error) console.error("Background scoring error:", error);
+        else console.log("Background scoring completed successfully");
+      }).catch((err) => {
         console.error("Background scoring failed:", err);
       });
     } catch (error) {
@@ -92,14 +113,14 @@ const Transition = () => {
     }
 
     try {
-      // Check if user completed all chat sessions
+      const requiredSessions = participant.assessment_type === "ecr" ? 1 : 20;
       const { data: sessionsData } = await supabase
         .from("chat_sessions")
         .select("*")
         .eq("participant_id", participant.id)
         .eq("is_complete", true);
 
-      if (!sessionsData || sessionsData.length < 20) {
+      if (!sessionsData || sessionsData.length < requiredSessions) {
         navigate("/chat");
         return;
       }
@@ -160,29 +181,48 @@ const Transition = () => {
           <CardContent className="space-y-6">
             <div className="prose prose-sm max-w-none text-muted-foreground">
               <p className="text-center">
-                You've completed the AI conversation portion of this experiment. 
+                You've completed the AI conversation portion of this experiment.
                 Thank you for sharing your thoughts and experiences.
               </p>
             </div>
 
-            <div className="bg-muted/50 rounded-lg p-6 space-y-4">
-              <div className="flex items-start gap-3">
-                <ClipboardList className="h-6 w-6 text-primary mt-1 flex-shrink-0" />
-                <div className="space-y-2">
-                  <h3 className="font-semibold text-lg">Next: Personality Questionnaire</h3>
-                  <p className="text-sm text-muted-foreground">
-                    You'll now complete a standard Big Five personality questionnaire (IPIP-50). 
-                    This provides a baseline personality assessment to compare with the experimental 
-                    AI-based assessment from your conversations.
-                  </p>
-                  <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
-                    <li>Rate how accurately each statement describes you</li>
-                    <li>Takes approximately 10-15 minutes</li>
-                    <li>No right or wrong answers — respond honestly</li>
-                  </ul>
+            {participant?.assessment_type === "ecr" ? (
+              <div className="bg-muted/50 rounded-lg p-6 space-y-4">
+                <div className="flex items-start gap-3">
+                  <ClipboardList className="h-6 w-6 text-primary mt-1 flex-shrink-0" />
+                  <div className="space-y-2">
+                    <h3 className="font-semibold text-lg">Next: Attachment Questionnaire</h3>
+                    <p className="text-sm text-muted-foreground">
+                      You'll now complete the ECR-R, a standard 36-item self-report of how you generally experience close relationships. This provides a baseline to compare with the experimental AI-based assessment.
+                    </p>
+                    <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
+                      <li>Rate how each statement applies to you on a 1–7 scale</li>
+                      <li>Takes approximately 7–10 minutes</li>
+                      <li>No right or wrong answers — respond honestly</li>
+                    </ul>
+                  </div>
                 </div>
               </div>
-            </div>
+            ) : (
+              <div className="bg-muted/50 rounded-lg p-6 space-y-4">
+                <div className="flex items-start gap-3">
+                  <ClipboardList className="h-6 w-6 text-primary mt-1 flex-shrink-0" />
+                  <div className="space-y-2">
+                    <h3 className="font-semibold text-lg">Next: Personality Questionnaire</h3>
+                    <p className="text-sm text-muted-foreground">
+                      You'll now complete a standard Big Five personality questionnaire (IPIP-50).
+                      This provides a baseline personality assessment to compare with the experimental
+                      AI-based assessment from your conversations.
+                    </p>
+                    <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
+                      <li>Rate how accurately each statement describes you</li>
+                      <li>Takes approximately 10-15 minutes</li>
+                      <li>No right or wrong answers — respond honestly</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="text-center pt-4">
               <Button onClick={handleContinue} size="lg" className="min-w-[200px]">

@@ -11,6 +11,8 @@ import { useToast } from "@/hooks/use-toast";
 import { Loader2, Trophy, Shield, ChevronLeft } from "lucide-react";
 import ParticipantHeader from "@/components/ParticipantHeader";
 import confetti from "canvas-confetti";
+import { EcrQuestionnaire } from "@/components/ecr/EcrQuestionnaire";
+import { assertNever } from "@/lib/assertNever";
 
 // Milestone messages for encouragement (at 25%, 50%, 75%)
 const MILESTONE_MESSAGES: Record<number, { title: string; message: string }> = {
@@ -81,6 +83,23 @@ const LIKERT_SCALE = [
 ];
 
 const Questionnaire = () => {
+  const { participant } = useParticipant();
+  // Route per-participant: ECR gets the 36-item ECR-R, big5 gets the existing IPIP-50.
+  // Admins with no participant default to the Big Five preview.
+  if (participant) {
+    switch (participant.assessment_type) {
+      case "ecr":
+        return <EcrQuestionnaire />;
+      case "big5":
+        break; // fall through to existing IPIP rendering below
+      default:
+        return assertNever(participant.assessment_type);
+    }
+  }
+  return <BigFiveQuestionnaire />;
+};
+
+const BigFiveQuestionnaire = () => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [responses, setResponses] = useState<Record<number, number>>({});
   const [loading, setLoading] = useState(false);

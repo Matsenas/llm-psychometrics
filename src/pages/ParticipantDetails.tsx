@@ -10,6 +10,9 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import universityLogo from "@/assets/university-of-tartu-logo.png";
 import { calculateBig5Scores } from "@/lib/calculateBig5";
 import ComparisonOverview from "@/components/ComparisonOverview";
+import AttachmentQuadrantOverview from "@/components/ecr/AttachmentQuadrantOverview";
+import { getAttachmentStyleInfo, classifyAttachment } from "@/lib/attachmentClassification";
+import type { AssessmentType } from "@/contexts/ParticipantContext";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,6 +31,12 @@ interface ParticipantInfo {
   name: string | null;
   created_at: string;
   disabled: boolean;
+  assessment_type: AssessmentType;
+}
+
+interface AttachmentMethodScore {
+  anxiety: number;
+  avoidance: number;
 }
 
 interface ProgressData {
@@ -35,6 +44,7 @@ interface ProgressData {
   started: boolean;
   sessions_complete: number;
   ipip_count: number;
+  ecr_count: number;
   accuracy_count: number;
   accuracy_complete: boolean;
   survey_submitted: boolean;
@@ -107,6 +117,8 @@ const ParticipantDetails = () => {
   const [ipipScores, setIpipScores] = useState<IPIPScores | null>(null);
   const [surveyResults, setSurveyResults] = useState<SurveyResults | null>(null);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [attachmentLlm, setAttachmentLlm] = useState<AttachmentMethodScore | null>(null);
+  const [attachmentSelf, setAttachmentSelf] = useState<AttachmentMethodScore | null>(null);
   const [expandedTraits, setExpandedTraits] = useState<Record<string, boolean>>({});
   const [expandedSessions, setExpandedSessions] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
@@ -167,11 +179,26 @@ const ParticipantDetails = () => {
       setParticipant({
         ...participantData,
         disabled: participantData.disabled ?? false,
+        assessment_type: (participantData.assessment_type as AssessmentType) ?? "big5",
       });
       const participantId = participantData.id;
 
-      // Load all data in parallel using the participant's internal ID
-      const [consent, anySessions, completedSessions, ipipResponses, results, llmScores, ipipStoredScores, sessionsData] = await Promise.all([
+      // Load all data in parallel using the participant's internal ID.
+      // ECR tables (ecr_responses, attachment_scores) are fetched regardless; they
+      // return zero rows for Big Five participants.
+      const [
+        consent,
+        anySessions,
+        completedSessions,
+        ipipResponses,
+        results,
+        llmScores,
+        ipipStoredScores,
+        sessionsData,
+        ecrResponses,
+        attachmentLlmResult,
+        attachmentSelfResult,
+      ] = await Promise.all([
         supabase.from("consent_responses").select("id").eq("participant_id", participantId).limit(1),
         supabase.from("chat_sessions").select("id").eq("participant_id", participantId).limit(1),
         supabase.from("chat_sessions").select("id").eq("participant_id", participantId).eq("is_complete", true),
@@ -180,10 +207,30 @@ const ParticipantDetails = () => {
         supabase.from("personality_scores").select("*").eq("participant_id", participantId).eq("method", "llm").maybeSingle(),
         supabase.from("personality_scores").select("*").eq("participant_id", participantId).eq("method", "ipip").maybeSingle(),
         supabase.from("chat_sessions").select("*").eq("participant_id", participantId).order("session_number"),
+        supabase.from("ecr_responses").select("id").eq("participant_id", participantId),
+        supabase.from("attachment_scores").select("anxiety, avoidance").eq("participant_id", participantId).eq("method", "llm").maybeSingle(),
+        supabase.from("attachment_scores").select("anxiety, avoidance").eq("participant_id", participantId).eq("method", "self").maybeSingle(),
       ]);
 
-      // Check if accuracy ratings are complete (all 10 trait ratings filled)
-      const accuracyFields = [
+      const assessmentType = (participantData.assessment_type as AssessmentType) ?? "big5";
+      const ecrCount = ecrResponses.data?.length || 0;
+
+      if (attachmentLlmResult.data) {
+        setAttachmentLlm({
+          anxiety: Number(attachmentLlmResult.data.anxiety),
+          avoidance: Number(attachmentLlmResult.data.avoidance),
+        });
+      }
+      if (attachmentSelfResult.data) {
+        setAttachmentSelf({
+          anxiety: Number(attachmentSelfResult.data.anxiety),
+          avoidance: Number(attachmentSelfResult.data.avoidance),
+        });
+      }
+
+      // Accuracy completeness depends on assessment_type. Big Five: 10 ratings (5x2).
+      // ECR: 4 ratings (2x2).
+      const big5AccuracyFields = [
         results.data?.openness_chat_accuracy,
         results.data?.openness_ipip_accuracy,
         results.data?.conscientiousness_chat_accuracy,
@@ -195,14 +242,23 @@ const ParticipantDetails = () => {
         results.data?.neuroticism_chat_accuracy,
         results.data?.neuroticism_ipip_accuracy,
       ];
-      const accuracyCount = accuracyFields.filter(v => v !== null && v !== undefined).length;
-      const accuracyComplete = accuracyCount === 10;
+      const ecrAccuracyFields = [
+        results.data?.anxiety_chat_accuracy,
+        results.data?.anxiety_self_accuracy,
+        results.data?.avoidance_chat_accuracy,
+        results.data?.avoidance_self_accuracy,
+      ];
+      const accuracyFields = assessmentType === "ecr" ? ecrAccuracyFields : big5AccuracyFields;
+      const accuracyCount = accuracyFields.filter((v) => v !== null && v !== undefined).length;
+      const accuracyTarget = assessmentType === "ecr" ? 4 : 10;
+      const accuracyComplete = accuracyCount === accuracyTarget;
 
       setProgress({
         consent: (consent.data?.length || 0) > 0,
         started: (anySessions.data?.length || 0) > 0,
         sessions_complete: completedSessions.data?.length || 0,
         ipip_count: ipipResponses.data?.length || 0,
+        ecr_count: ecrCount,
         accuracy_count: accuracyCount,
         accuracy_complete: accuracyComplete,
         survey_submitted: results.data?.submitted || false,
@@ -316,11 +372,13 @@ const ParticipantDetails = () => {
         await supabase.from("chat_sessions").delete().eq("participant_id", participant.id);
       }
 
-      // Delete remaining data
+      // Delete remaining data (includes ECR-specific tables; no-op for Big Five participants).
       await Promise.all([
         supabase.from("survey_results").delete().eq("participant_id", participant.id),
         supabase.from("personality_scores").delete().eq("participant_id", participant.id),
+        supabase.from("attachment_scores").delete().eq("participant_id", participant.id),
         supabase.from("ipip_responses").delete().eq("participant_id", participant.id),
+        supabase.from("ecr_responses").delete().eq("participant_id", participant.id),
         supabase.from("consent_responses").delete().eq("participant_id", participant.id),
       ]);
 
@@ -407,12 +465,29 @@ const ParticipantDetails = () => {
     return null;
   }
 
+  const isEcr = participant.assessment_type === "ecr";
+  const chatTarget = isEcr ? 1 : 20;
+  const questionnaireTarget = isEcr ? 36 : 50;
+  const questionnaireCount = isEcr ? progress.ecr_count : progress.ipip_count;
+  const accuracyTarget = isEcr ? 4 : 10;
   const steps = [
     { label: "Consent", complete: progress.consent },
     { label: "Started", complete: progress.started },
-    { label: "Chats", complete: progress.sessions_complete === 20, detail: `${progress.sessions_complete}/20` },
-    { label: "IPIP", complete: progress.ipip_count === 50, detail: `${progress.ipip_count}/50` },
-    { label: "Accuracy", complete: progress.accuracy_complete, detail: `${progress.accuracy_count}/10` },
+    {
+      label: isEcr ? "Chat" : "Chats",
+      complete: progress.sessions_complete === chatTarget,
+      detail: `${progress.sessions_complete}/${chatTarget}`,
+    },
+    {
+      label: isEcr ? "ECR-R" : "IPIP",
+      complete: questionnaireCount === questionnaireTarget,
+      detail: `${questionnaireCount}/${questionnaireTarget}`,
+    },
+    {
+      label: "Accuracy",
+      complete: progress.accuracy_complete,
+      detail: `${progress.accuracy_count}/${accuracyTarget}`,
+    },
     { label: "Submitted", complete: progress.survey_submitted },
   ];
 
@@ -561,17 +636,71 @@ const ParticipantDetails = () => {
           </CardContent>
         </Card>
 
-        {/* Comparison Overview */}
-        <ComparisonOverview
-          chatScores={chatScores ? {
-            openness: (chatScores.openness.score / 120) * 100,
-            conscientiousness: (chatScores.conscientiousness.score / 120) * 100,
-            extraversion: (chatScores.extraversion.score / 120) * 100,
-            agreeableness: (chatScores.agreeableness.score / 120) * 100,
-            neuroticism: (chatScores.neuroticism.score / 120) * 100,
-          } : null}
-          ipipScores={ipipScores}
-        />
+        {/* Assessment-type badge */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs uppercase tracking-wide text-muted-foreground">Assessment:</span>
+          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+            isEcr ? "bg-amber-100 text-amber-900" : "bg-primary/10 text-primary"
+          }`}>
+            {isEcr ? "ECR-R (Attachment)" : "Big Five (IPIP)"}
+          </span>
+        </div>
+
+        {/* Assessment-specific overview */}
+        {isEcr ? (
+          <AttachmentQuadrantOverview chatScores={attachmentLlm} selfScores={attachmentSelf} />
+        ) : (
+          <ComparisonOverview
+            chatScores={chatScores ? {
+              openness: (chatScores.openness.score / 120) * 100,
+              conscientiousness: (chatScores.conscientiousness.score / 120) * 100,
+              extraversion: (chatScores.extraversion.score / 120) * 100,
+              agreeableness: (chatScores.agreeableness.score / 120) * 100,
+              neuroticism: (chatScores.neuroticism.score / 120) * 100,
+            } : null}
+            ipipScores={ipipScores}
+          />
+        )}
+
+        {/* ECR-only: attachment scores detail card */}
+        {isEcr && (attachmentLlm || attachmentSelf) && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Attachment Assessment Results</CardTitle>
+              <CardDescription>
+                Anxiety and avoidance scores on the native ECR-R 1–7 scale. Quadrant classification uses the scale midpoint cutoff of 4.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {attachmentLlm && (
+                <div className="p-4 border rounded-lg space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">Chat (LLM)</span>
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                      {getAttachmentStyleInfo(classifyAttachment(attachmentLlm)).label}
+                    </span>
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    Anxiety <strong className="text-foreground">{attachmentLlm.anxiety.toFixed(2)}</strong> · Avoidance <strong className="text-foreground">{attachmentLlm.avoidance.toFixed(2)}</strong>
+                  </div>
+                </div>
+              )}
+              {attachmentSelf && (
+                <div className="p-4 border rounded-lg space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">ECR-R Self-Report</span>
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                      {getAttachmentStyleInfo(classifyAttachment(attachmentSelf)).label}
+                    </span>
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    Anxiety <strong className="text-foreground">{attachmentSelf.anxiety.toFixed(2)}</strong> · Avoidance <strong className="text-foreground">{attachmentSelf.avoidance.toFixed(2)}</strong>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Chat Assessment Results */}
         <Card>

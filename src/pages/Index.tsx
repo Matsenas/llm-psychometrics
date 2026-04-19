@@ -122,7 +122,7 @@ const Index = () => {
       // First, lookup the participant by respondent_id
       const { data: participantData, error: lookupError } = await supabase
         .from("participants")
-        .select("id, respondent_id, name, user_id, disabled")
+        .select("id, respondent_id, name, user_id, disabled, assessment_type")
         .eq("respondent_id", respondentId.trim())
         .maybeSingle();
 
@@ -163,6 +163,7 @@ const Index = () => {
             id: participantData.id,
             respondent_id: participantData.respondent_id,
             name: participantData.name,
+            assessment_type: (participantData.assessment_type as "big5" | "ecr") ?? "ecr",
           });
           await checkParticipantProgress(participantData.id);
           return;
@@ -201,6 +202,7 @@ const Index = () => {
         id: participantData.id,
         respondent_id: participantData.respondent_id,
         name: participantData.name,
+        assessment_type: (participantData.assessment_type as "big5" | "ecr") ?? "ecr",
       });
 
       // Check progress and redirect to appropriate step

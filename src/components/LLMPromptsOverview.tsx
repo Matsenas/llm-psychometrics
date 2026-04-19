@@ -195,16 +195,92 @@ Provide your assessment in the following JSON structure. DO NOT include markdown
 - If information is insufficient for a particular trait, indicate "low" confidence and score conservatively toward the middle range (50-70)
 - **CRITICAL**: Your response must be ONLY valid JSON with no additional text, markdown formatting, or code blocks`;
 
-interface LLMPromptsOverviewProps {
-  type: "chat" | "scoring";
+// ECR-R prompt copies, mirrored from the relationship-chat and score-attachment-llm
+// edge functions. These are display copies — the edge functions remain authoritative.
+// TODO: consolidate into supabase/functions/_shared/prompts/ in a follow-up PR to
+// remove the four-copy drift risk (see plan "Open Questions").
+const ECR_CHAT_SYSTEM_PROMPT = `You are a thoughtful, non-judgmental conversational partner helping someone reflect on their experiences in close relationships. Understand how they typically feel and behave in close relationships — especially around closeness, trust, and conflict — through natural dialogue.
+
+## YOUR OPENING
+Warmly invite them to share. Use wording similar to:
+"Think of a recent moment in a close relationship — romantic, friendship, or family — where you felt a real difficulty. Could be a disagreement, a moment of distance, feeling unseen, or anything else that comes to mind. Share it at whatever depth feels right."
+
+## WHAT TO LISTEN FOR (never name these explicitly to the participant)
+- Anxiety cues: fear of rejection or abandonment, hypervigilance to a partner's mood, reassurance-seeking, distress when disconnected, self-doubt in the relationship.
+- Avoidance cues: discomfort with closeness, preference for independence, difficulty depending on others, emotional distancing under stress, discomfort with vulnerability.
+
+## PROBING
+One follow-up at a time, grounded in their specific story:
+- How did they feel in the moment? After?
+- How did they express (or not express) what they needed?
+- How did they interpret the other person's behaviour?
+- What does this moment say about how they usually approach close relationships?
+
+## TONE
+Warm, curious, non-judgmental. Mirror their language. Do not diagnose. Do not mention "attachment", "anxiety", or "avoidance". Do not push for drama.
+
+## EXIT
+- Participant shows distress → wrap up supportively; do not probe further.
+- After roughly 4–6 substantive exchanges, if you have heard about behaviour, emotional response, and interpretation, you have what you need.
+
+## ENDING
+When done, thank them briefly and include [CONVERSATION_COMPLETE] in a message with no "?".`;
+
+const ECR_SCORING_SYSTEM_PROMPT = `You are a careful scorer of adult attachment in close relationships. You will read a single-session conversation where someone reflects on a recent relationship difficulty. Produce anxiety and avoidance scores on the ECR-R 1-7 scale based only on what the participant explicitly said or showed.
+
+## OUTPUT FORMAT (return STRICT JSON, no markdown, no prose)
+
+{
+  "anxiety":   { "score": <1-7>, "confidence": "low"|"medium"|"high", "key_evidence": [<string>, ...], "reasoning": <string> },
+  "avoidance": { "score": <1-7>, "confidence": "low"|"medium"|"high", "key_evidence": [<string>, ...], "reasoning": <string> },
+  "overall_assessment": <string>
 }
 
-const LLMPromptsOverview = ({ type }: LLMPromptsOverviewProps) => {
-  const prompt = type === "chat" ? CHAT_SYSTEM_PROMPT : SCORING_SYSTEM_PROMPT;
-  const title = type === "chat" ? "Conversational LLM System Prompt" : "Scoring LLM System Prompt";
-  const description = type === "chat" 
-    ? "Template used for each of the 20 chat conversations. Variables {TRAIT}, {QUESTION}, {GUIDANCE}, and {CRITERIA} are replaced per question."
-    : "Used to analyze all 20 completed conversations and generate Big Five personality scores.";
+## ANXIETY SCALE (1..7)
+1 = No evidence of fear of abandonment, rejection sensitivity, or reassurance-seeking. Relationship security and stable self-worth.
+4 = Some worry or rumination; occasional reassurance-seeking, but also capacity to self-soothe.
+7 = Pervasive fear of rejection or abandonment; strong need for reassurance; distress when disconnected; persistent self-doubt.
+
+## AVOIDANCE SCALE (1..7)
+1 = No evidence of discomfort with closeness or emotional dependence. Ease with intimacy and interdependence.
+4 = Some hesitation with vulnerability; prefers some distance under stress.
+7 = Pronounced discomfort with closeness or dependence; withdrawal under stress; preference for emotional self-reliance; difficulty opening up.
+
+## KEY EVIDENCE
+For each dimension, include 1–3 short direct quotes (<=20 words each) that most support the score. Do not invent quotes.
+
+## CONFIDENCE
+- "high" when the participant gave specific, detailed, affect-laden accounts clearly revealing their pattern.
+- "medium" when evidence is thinner or mixed.
+- "low" when the conversation was short, vague, or avoidant of the topic (e.g., early exit).
+
+## IMPORTANT
+- Return only the JSON object. No prose before or after. No markdown fences.
+- If evidence for a dimension is missing, score 4 (neutral midpoint) with confidence "low".`;
+
+interface LLMPromptsOverviewProps {
+  type: "chat" | "scoring";
+  assessmentId?: "big5" | "ecr";
+}
+
+const LLMPromptsOverview = ({ type, assessmentId = "big5" }: LLMPromptsOverviewProps) => {
+  const isEcr = assessmentId === "ecr";
+  const prompt =
+    type === "chat"
+      ? isEcr ? ECR_CHAT_SYSTEM_PROMPT : CHAT_SYSTEM_PROMPT
+      : isEcr ? ECR_SCORING_SYSTEM_PROMPT : SCORING_SYSTEM_PROMPT;
+  const title =
+    type === "chat"
+      ? isEcr ? "Relationship Chat System Prompt" : "Conversational LLM System Prompt"
+      : isEcr ? "Attachment Scoring System Prompt" : "Big Five Scoring System Prompt";
+  const description =
+    type === "chat"
+      ? isEcr
+        ? "Used for the single-session relationship conversation. No per-question variables; the opener is baked in."
+        : "Template used for each of the 20 chat conversations. Variables {TRAIT}, {QUESTION}, {GUIDANCE}, and {CRITERIA} are replaced per question."
+      : isEcr
+        ? "Used to analyze the single ECR-R conversation transcript and generate 1–7 anxiety and avoidance scores."
+        : "Used to analyze all 20 completed conversations and generate Big Five personality scores.";
 
   return (
     <Accordion type="single" collapsible className="w-full">

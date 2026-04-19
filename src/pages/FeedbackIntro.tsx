@@ -52,15 +52,24 @@ const FeedbackIntro = () => {
     }
 
     try {
-      // Check if user completed the IPIP questionnaire
-      const { data: ipipResponses } = await supabase
-        .from("ipip_responses")
-        .select("id")
-        .eq("participant_id", participant.id);
-
-      if (!ipipResponses || ipipResponses.length < 50) {
-        navigate("/questionnaire");
-        return;
+      if (participant.assessment_type === "ecr") {
+        const { data: ecrResponses } = await supabase
+          .from("ecr_responses")
+          .select("id")
+          .eq("participant_id", participant.id);
+        if (!ecrResponses || ecrResponses.length < 36) {
+          navigate("/questionnaire");
+          return;
+        }
+      } else {
+        const { data: ipipResponses } = await supabase
+          .from("ipip_responses")
+          .select("id")
+          .eq("participant_id", participant.id);
+        if (!ipipResponses || ipipResponses.length < 50) {
+          navigate("/questionnaire");
+          return;
+        }
       }
     } catch (error) {
       console.error("Error checking access:", error);
@@ -117,31 +126,51 @@ const FeedbackIntro = () => {
           <CardContent className="space-y-6">
             <div className="prose prose-sm max-w-none text-muted-foreground">
               <p className="text-center">
-                You've completed both the AI conversations and the personality questionnaire. One last step remains!
+                You've completed both the AI conversation{participant?.assessment_type === "big5" ? "s" : ""} and the self-report questionnaire. One last step remains!
               </p>
             </div>
 
-            <div className="bg-muted/50 rounded-lg p-6 space-y-4">
-              <div className="flex items-start gap-3">
-                <BarChart3 className="h-6 w-6 text-primary mt-1 flex-shrink-0" />
-                <div className="space-y-2">
-                  <h3 className="font-semibold text-lg">Final Step: Rate the Accuracy</h3>
-                  <p className="text-sm text-muted-foreground">
-                    You'll now see your Big Five personality scores from both assessment methods: the standard IPIP
-                    questionnaire and the experimental AI-based assessment.
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    For each of the five personality traits, you'll rate how accurately each method reflects{" "}
-                    <strong>your</strong> personality.
-                  </p>
-                  <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
-                    <li>View your scores for each trait from both methods</li>
-                    <li>Rate how well each score describes you</li>
-                    <li>Your feedback helps evaluate the AI assessment approach</li>
-                  </ul>
+            {participant?.assessment_type === "ecr" ? (
+              <div className="bg-muted/50 rounded-lg p-6 space-y-4">
+                <div className="flex items-start gap-3">
+                  <BarChart3 className="h-6 w-6 text-primary mt-1 flex-shrink-0" />
+                  <div className="space-y-2">
+                    <h3 className="font-semibold text-lg">Final Step: Rate the Accuracy</h3>
+                    <p className="text-sm text-muted-foreground">
+                      You'll now see your attachment scores from both methods: the ECR-R self-report and the experimental AI-based assessment.
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      For each of the two dimensions (anxiety and avoidance), you'll rate how accurately each method reflects <strong>you</strong>.
+                    </p>
+                    <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
+                      <li>View your anxiety and avoidance scores from both methods</li>
+                      <li>Rate how well each score describes you</li>
+                      <li>Your feedback helps evaluate the AI assessment approach</li>
+                    </ul>
+                  </div>
                 </div>
               </div>
-            </div>
+            ) : (
+              <div className="bg-muted/50 rounded-lg p-6 space-y-4">
+                <div className="flex items-start gap-3">
+                  <BarChart3 className="h-6 w-6 text-primary mt-1 flex-shrink-0" />
+                  <div className="space-y-2">
+                    <h3 className="font-semibold text-lg">Final Step: Rate the Accuracy</h3>
+                    <p className="text-sm text-muted-foreground">
+                      You'll now see your Big Five personality scores from both assessment methods: the standard IPIP questionnaire and the experimental AI-based assessment.
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      For each of the five personality traits, you'll rate how accurately each method reflects <strong>your</strong> personality.
+                    </p>
+                    <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
+                      <li>View your scores for each trait from both methods</li>
+                      <li>Rate how well each score describes you</li>
+                      <li>Your feedback helps evaluate the AI assessment approach</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="text-center pt-4">
               <Button onClick={handleContinue} size="lg" className="min-w-[200px]">

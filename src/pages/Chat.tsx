@@ -27,6 +27,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { EcrChatRunner } from "@/components/ecr/EcrChatRunner";
+import { assertNever } from "@/lib/assertNever";
 
 // Milestone messages for encouragement
 const MILESTONE_MESSAGES: Record<number, { title: string; message: string }> = {
@@ -72,6 +74,21 @@ const BIG5_QUESTIONS = [
 const MIN_MESSAGES_TO_SKIP = 2;
 
 const Chat = () => {
+  const { participant } = useParticipant();
+  if (participant) {
+    switch (participant.assessment_type) {
+      case "ecr":
+        return <EcrChatRunner />;
+      case "big5":
+        break; // fall through to the existing Big Five runner below
+      default:
+        return assertNever(participant.assessment_type);
+    }
+  }
+  return <BigFiveChat />;
+};
+
+const BigFiveChat = () => {
   const [currentSession, setCurrentSession] = useState(1);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");

@@ -1,6 +1,11 @@
 # LLM Psychometrics
 
-A research web application studying whether AI chatbots can accurately estimate personality traits through natural conversation. Participants complete 20 guided chat sessions with an LLM, then a standard IPIP-50 self-report questionnaire. The system compares LLM-inferred Big Five scores against self-reported scores and collects participant accuracy ratings.
+A research web application studying whether AI chatbots can accurately estimate psychological traits through natural conversation. Participants are assigned to one of two tracks:
+
+- **Big Five track** — 20 guided chat sessions + IPIP-50 self-report. Results shown on a 5-axis radar comparing LLM-inferred vs self-reported scores.
+- **ECR-R attachment track** — a single open-ended chat about a recent relationship difficulty + ECR-R 36-item self-report. Results shown on a 2-axis anxiety × avoidance quadrant plot (Secure / Anxious-Preoccupied / Dismissive-Avoidant / Fearful-Avoidant) comparing LLM-inferred vs self-reported scores.
+
+Each participant is on exactly one track, set per participant via `participants.assessment_type`. New participants default to the ECR track; admins can flip individual participants to Big Five via the admin UI or during CSV import.
 
 Built as part of research at the University of Tartu.
 
@@ -33,8 +38,10 @@ Built as part of research at the University of Tartu.
 │  PostgreSQL         9 tables, RLS policies, helper functions│
 │  Auth               Anonymous sessions (participants),      │
 │                     email/password (admins)                  │
-│  Edge Functions     chat-conversation (LLM dialogue)        │
-│                     score-personality-unified (trait scoring)│
+│  Edge Functions     chat-conversation (Big Five dialogue)    │
+│                     score-personality-unified (Big Five)     │
+│                     relationship-chat (ECR dialogue)         │
+│                     score-attachment-llm (ECR scoring)       │
 └──────────────┬──────────────────────────────────────────────┘
                │ Anthropic Messages API
 ┌──────────────▼──────────────┐
@@ -148,25 +155,42 @@ Built as part of research at the University of Tartu.
 
 ## Edge Functions
 
-### `chat-conversation`
+### `chat-conversation` (Big Five track)
 
-Handles real-time LLM dialogue during chat sessions.
+Handles LLM dialogue for one of the 20 Big Five chat sessions.
 
 1. Validates JWT and verifies session ownership
 2. Retrieves conversation history from `chat_messages`
 3. Builds system prompt with trait-specific guidance (aspect, probing strategy, exit criteria)
-4. Calls Gemini 2.5 Flash via Lovable AI Gateway
+4. Calls Anthropic Claude Sonnet 4 via the Messages API
 5. Detects `[CONVERSATION_COMPLETE]` tag to signal session end
 6. Returns cleaned response + `shouldEnd` flag
 
-### `score-personality-unified`
+### `score-personality-unified` (Big Five track)
 
 Analyzes all 20 conversation transcripts to generate Big Five personality scores.
 
 1. Retrieves all `chat_messages` for a participant
-2. Concatenates transcripts with expert system prompt (Big Five framework, 6 facets per trait, behavioral indicators)
-3. Calls LLM to generate scores on a 0-120 scale
-4. Normalizes to 0-100 and stores in `personality_scores` (method=`llm`)
+2. Concatenates transcripts with an expert rubric (Big Five framework, 6 facets per trait, behavioral indicators)
+3. Calls Claude to generate scores on a 0–120 scale
+4. Normalizes to 0–100 and stores in `personality_scores` (method=`llm`)
+
+### `relationship-chat` (ECR track)
+
+Single-session LLM dialogue eliciting attachment-relevant behaviour.
+
+1. Validates JWT + verifies session ownership + asserts `participants.assessment_type='ecr'`
+2. Builds a prompt around a relationship-difficulty opener and probing for anxiety/avoidance cues
+3. Calls Claude; returns cleaned response + `shouldEnd` flag
+
+### `score-attachment-llm` (ECR track)
+
+Reads the single ECR conversation and generates attachment scores on the native 1–7 ECR-R scale.
+
+1. Validates the ECR chat session is complete
+2. Calls Claude with an ECR-R rubric (anchors at 1/4/7 for both anxiety and avoidance)
+3. Parses strict JSON output, validates `score ∈ [1,7]`
+4. Upserts to `attachment_scores` with `method='llm'` (numeric `anxiety`, `avoidance`, plus `llm_metadata` JSONB for confidence/evidence/reasoning)
 
 ## Admin Dashboard
 
@@ -178,17 +202,36 @@ Analyzes all 20 conversation transcripts to generate Big Five personality scores
 
 ## Scoring
 
-### IPIP-50 (self-report)
+### IPIP-50 (Big Five self-report)
 
-Each Big Five trait is measured by 10 items (5 positive-keyed, 5 reverse-keyed). Raw scores range 10-50, normalized to 0-100:
+Each Big Five trait is measured by 10 items (5 positive-keyed, 5 reverse-keyed). Raw scores range 10–50, normalized to 0–100:
 
 ```
 score = ((rawScore - 10) / 40) * 100
 ```
 
-### LLM-inferred
+### ECR-R (attachment self-report)
 
-The `score-personality-unified` function prompts the LLM with all 20 conversation transcripts and a structured rubric (6 facets per trait, behavioral indicators). Scores are generated on a 0-120 scale and normalized to 0-100.
+The ECR-R consists of 36 items on a 7-point Likert scale (1 = Strongly Disagree, 7 = Strongly Agree). Items are presented in a random order per participant (seed persisted in `localStorage`). Anxiety = mean of items 1–18 (reverse-keyed: 9, 11). Avoidance = mean of items 19–36 (reverse-keyed: 20, 22, 26, 27, 28, 29, 30, 31, 33, 34, 35, 36). Scoring happens client-side in TypeScript and is upserted to `attachment_scores(method='self')`.
+
+Attachment style is derived from (anxiety, avoidance) using the scale midpoint (4) as a cutoff:
+
+- Low anxiety, low avoidance → Secure
+- High anxiety, low avoidance → Anxious-Preoccupied
+- Low anxiety, high avoidance → Dismissive-Avoidant
+- High anxiety, high avoidance → Fearful-Avoidant
+
+Midpoint cutoff is a conservative MVP default; sample-median cutoffs are a future enhancement once enough pilot data is collected.
+
+> ECR-R source: Fraley, R. C., Waller, N. G., & Brennan, K. A. (2000). *An item-response theory analysis of self-report measures of adult attachment.* Journal of Personality and Social Psychology, 78, 350–365.
+
+### LLM-inferred — Big Five
+
+The `score-personality-unified` function prompts the LLM with all 20 conversation transcripts and a structured rubric (6 facets per trait, behavioral indicators). Scores are generated on a 0–120 scale and normalized to 0–100 for display.
+
+### LLM-inferred — Attachment
+
+The `score-attachment-llm` function prompts the LLM with the single ECR conversation transcript and a rubric with anchors at 1/4/7 for each subscale. Output is native 1–7 (no scale conversion). Confidence levels reflect transcript depth; an early-exit transcript is scored with low confidence.
 
 ## Getting Started
 

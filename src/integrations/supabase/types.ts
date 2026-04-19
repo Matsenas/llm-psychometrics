@@ -14,6 +14,76 @@ export type Database = {
   }
   public: {
     Tables: {
+      attachment_scores: {
+        Row: {
+          anxiety: number
+          avoidance: number
+          created_at: string
+          id: string
+          llm_metadata: Json | null
+          method: string
+          participant_id: string
+        }
+        Insert: {
+          anxiety: number
+          avoidance: number
+          created_at?: string
+          id?: string
+          llm_metadata?: Json | null
+          method: string
+          participant_id: string
+        }
+        Update: {
+          anxiety?: number
+          avoidance?: number
+          created_at?: string
+          id?: string
+          llm_metadata?: Json | null
+          method?: string
+          participant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "attachment_scores_participant_id_fkey"
+            columns: ["participant_id"]
+            isOneToOne: false
+            referencedRelation: "participants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ecr_responses: {
+        Row: {
+          id: string
+          item_number: number
+          participant_id: string
+          responded_at: string
+          response_value: number
+        }
+        Insert: {
+          id?: string
+          item_number: number
+          participant_id: string
+          responded_at?: string
+          response_value: number
+        }
+        Update: {
+          id?: string
+          item_number?: number
+          participant_id?: string
+          responded_at?: string
+          response_value?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ecr_responses_participant_id_fkey"
+            columns: ["participant_id"]
+            isOneToOne: false
+            referencedRelation: "participants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       chat_messages: {
         Row: {
           content: string
@@ -162,6 +232,7 @@ export type Database = {
       }
       participants: {
         Row: {
+          assessment_type: string
           created_at: string | null
           disabled: boolean
           id: string
@@ -170,6 +241,7 @@ export type Database = {
           user_id: string | null
         }
         Insert: {
+          assessment_type?: string
           created_at?: string | null
           disabled?: boolean
           id?: string
@@ -178,6 +250,7 @@ export type Database = {
           user_id?: string | null
         }
         Update: {
+          assessment_type?: string
           created_at?: string | null
           disabled?: boolean
           id?: string
@@ -259,6 +332,10 @@ export type Database = {
         Row: {
           agreeableness_chat_accuracy: number | null
           agreeableness_ipip_accuracy: number | null
+          anxiety_chat_accuracy: number | null
+          anxiety_self_accuracy: number | null
+          avoidance_chat_accuracy: number | null
+          avoidance_self_accuracy: number | null
           chat_rating: number | null
           conscientiousness_chat_accuracy: number | null
           conscientiousness_ipip_accuracy: number | null
@@ -280,6 +357,10 @@ export type Database = {
         Insert: {
           agreeableness_chat_accuracy?: number | null
           agreeableness_ipip_accuracy?: number | null
+          anxiety_chat_accuracy?: number | null
+          anxiety_self_accuracy?: number | null
+          avoidance_chat_accuracy?: number | null
+          avoidance_self_accuracy?: number | null
           chat_rating?: number | null
           conscientiousness_chat_accuracy?: number | null
           conscientiousness_ipip_accuracy?: number | null

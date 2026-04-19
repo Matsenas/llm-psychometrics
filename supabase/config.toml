@@ -5,3 +5,9 @@ verify_jwt = true
 
 [functions.score-personality-unified]
 verify_jwt = true
+
+[functions.relationship-chat]
+verify_jwt = true
+
+[functions.score-attachment-llm]
+verify_jwt = true

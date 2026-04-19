@@ -20,6 +20,8 @@ import {
 } from "@/components/ui/select";
 import QuestionsOverview from "@/components/QuestionsOverview";
 import LLMPromptsOverview from "@/components/LLMPromptsOverview";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { AssessmentType } from "@/contexts/ParticipantContext";
 
 import {
   AlertDialog,
@@ -51,10 +53,12 @@ interface ParticipantData {
   id: string;
   respondent_id: string;
   name: string | null;
+  assessment_type: AssessmentType;
   consent: boolean;
   started: boolean;
   sessions_complete: number;
   ipip_count: number;
+  ecr_count: number;
   survey_submitted: boolean;
 }
 
@@ -65,14 +69,11 @@ const Admin = () => {
   const [csvInput, setCsvInput] = useState("");
   const [newRespondentId, setNewRespondentId] = useState("");
   const [newName, setNewName] = useState("");
+  const [newAssessmentType, setNewAssessmentType] = useState<AssessmentType>("ecr");
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [newAdminEmail, setNewAdminEmail] = useState("");
-  const [newAdminPassword, setNewAdminPassword] = useState("");
-  const [creatingAdmin, setCreatingAdmin] = useState(false);
   const [adminEmails, setAdminEmails] = useState<string[]>([]);
   const [addParticipantOpen, setAddParticipantOpen] = useState(false);
   const [bulkImportOpen, setBulkImportOpen] = useState(false);
-  const [createAdminOpen, setCreateAdminOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
   const [participantFilter, setParticipantFilter] = useState<"all" | "not-submitted" | "in-progress" | "submitted">("all");
@@ -161,68 +162,6 @@ const Admin = () => {
     }
   };
 
-  const createAdminAccount = async () => {
-    if (!newAdminEmail.trim() || !newAdminPassword.trim()) {
-      toast({
-        title: "Error",
-        description: "Email and password are required",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    if (newAdminPassword.length < 6) {
-      toast({
-        title: "Error",
-        description: "Password must be at least 6 characters",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setCreatingAdmin(true);
-    try {
-      // Create user
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: newAdminEmail.trim(),
-        password: newAdminPassword,
-        options: {
-          emailRedirectTo: `${window.location.origin}/auth`,
-        },
-      });
-
-      if (authError) throw authError;
-      if (!authData.user) throw new Error("Failed to create user");
-
-      // Add admin role
-      const { error: roleError } = await supabase
-        .from("user_roles")
-        .insert({
-          user_id: authData.user.id,
-          role: "admin",
-        });
-
-      if (roleError) throw roleError;
-
-      toast({
-        title: "Success",
-        description: `Admin account created for ${newAdminEmail}`,
-      });
-
-      setNewAdminEmail("");
-      setNewAdminPassword("");
-      loadAdminEmails();
-    } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.message,
-        variant: "destructive",
-      });
-    } finally {
-      setCreatingAdmin(false);
-    }
-  };
-
   const loadParticipants = async () => {
     try {
       const { data: participantsData, error } = await supabase
@@ -237,13 +176,14 @@ const Admin = () => {
         return;
       }
 
-      const enrichedData = await Promise.all(
+      const enrichedData: ParticipantData[] = await Promise.all(
         participantsData.map(async (p) => {
-          const [consent, anySessions, completedSessions, ipip, results] = await Promise.all([
+          const [consent, anySessions, completedSessions, ipip, ecr, results] = await Promise.all([
             supabase.from("consent_responses").select("id").eq("participant_id", p.id).limit(1),
             supabase.from("chat_sessions").select("id").eq("participant_id", p.id).limit(1),
             supabase.from("chat_sessions").select("id").eq("participant_id", p.id).eq("is_complete", true),
             supabase.from("ipip_responses").select("id").eq("participant_id", p.id),
+            supabase.from("ecr_responses").select("id").eq("participant_id", p.id),
             supabase.from("survey_results").select("submitted").eq("participant_id", p.id).limit(1),
           ]);
 
@@ -251,10 +191,12 @@ const Admin = () => {
             id: p.id,
             respondent_id: p.respondent_id,
             name: p.name,
+            assessment_type: (p.assessment_type as AssessmentType) ?? "big5",
             consent: (consent.data?.length || 0) > 0,
             started: (anySessions.data?.length || 0) > 0,
             sessions_complete: completedSessions.data?.length || 0,
             ipip_count: ipip.data?.length || 0,
+            ecr_count: ecr.data?.length || 0,
             survey_submitted: results.data?.[0]?.submitted || false,
           };
         })
@@ -288,6 +230,7 @@ const Admin = () => {
         .insert({
           respondent_id: newRespondentId.trim(),
           name: newName.trim() || null,
+          assessment_type: newAssessmentType,
         });
 
       if (error) throw error;
@@ -299,6 +242,7 @@ const Admin = () => {
 
       setNewRespondentId("");
       setNewName("");
+      setNewAssessmentType("ecr");
       loadParticipants();
     } catch (error: any) {
       toast({
@@ -407,11 +351,12 @@ const Admin = () => {
 
   const exportData = async () => {
     try {
-      // Fetch survey results, personality scores, and participants
-      const [surveyRes, llmScoresRes, ipipScoresRes, participantsRes] = await Promise.all([
+      // Fetch survey results, personality/attachment scores, and participants.
+      const [surveyRes, llmScoresRes, ipipScoresRes, attachmentScoresRes, participantsRes] = await Promise.all([
         supabase.from("survey_results").select("*"),
         supabase.from("personality_scores").select("*").eq("method", "llm"),
         supabase.from("personality_scores").select("*").eq("method", "ipip"),
+        supabase.from("attachment_scores").select("*"),
         supabase.from("participants").select("*"),
       ]);
 
@@ -419,6 +364,16 @@ const Admin = () => {
       const llmScoresMap = new Map(llmScoresRes.data?.map(s => [s.participant_id, s]) || []);
       const ipipScoresMap = new Map(ipipScoresRes.data?.map(s => [s.participant_id, s]) || []);
       const surveyResultsMap = new Map(surveyRes.data?.map(s => [s.participant_id, s]) || []);
+      const attachmentLlmMap = new Map(
+        (attachmentScoresRes.data ?? [])
+          .filter((s) => s.method === "llm")
+          .map((s) => [s.participant_id, s]),
+      );
+      const attachmentSelfMap = new Map(
+        (attachmentScoresRes.data ?? [])
+          .filter((s) => s.method === "self")
+          .map((s) => [s.participant_id, s]),
+      );
 
       // Filter participants based on current filter state
       const filteredParticipants = participants.filter(p => {
@@ -450,45 +405,63 @@ const Admin = () => {
         return score?.toFixed(1) ?? "";
       };
 
-      // Same column format for all filters - matches original export format
+      // Single wide-format export with Big Five and ECR columns side by side.
+      // Per-participant rows include only the data for their assessment_type; the
+      // other assessment's columns are empty.
       const headers = [
-        "Respondent ID", 
+        "Respondent ID",
         "Name",
-        // Personality scores
-        "Openness (Chat)", 
-        "Conscientiousness (Chat)", 
-        "Extraversion (Chat)", 
-        "Agreeableness (Chat)", 
-        "Neuroticism (Chat)", 
-        "Openness (IPIP)", 
-        "Conscientiousness (IPIP)", 
-        "Extraversion (IPIP)", 
-        "Agreeableness (IPIP)", 
-        "Neuroticism (IPIP)", 
-        // Trait-by-trait accuracy ratings (1-5 scale)
-        "Openness Chat Accuracy", 
+        "Assessment Type",
+        // Big Five scores (chat and ipip), 0-100
+        "Openness (Chat)",
+        "Conscientiousness (Chat)",
+        "Extraversion (Chat)",
+        "Agreeableness (Chat)",
+        "Neuroticism (Chat)",
+        "Openness (IPIP)",
+        "Conscientiousness (IPIP)",
+        "Extraversion (IPIP)",
+        "Agreeableness (IPIP)",
+        "Neuroticism (IPIP)",
+        // Big Five accuracy ratings (1-5)
+        "Openness Chat Accuracy",
         "Openness IPIP Accuracy",
-        "Conscientiousness Chat Accuracy", 
+        "Conscientiousness Chat Accuracy",
         "Conscientiousness IPIP Accuracy",
-        "Extraversion Chat Accuracy", 
+        "Extraversion Chat Accuracy",
         "Extraversion IPIP Accuracy",
-        "Agreeableness Chat Accuracy", 
+        "Agreeableness Chat Accuracy",
         "Agreeableness IPIP Accuracy",
-        "Neuroticism Chat Accuracy", 
+        "Neuroticism Chat Accuracy",
         "Neuroticism IPIP Accuracy",
+        // ECR attachment scores (chat and self), native 1-7 scale
+        "Anxiety (Chat)",
+        "Avoidance (Chat)",
+        "Anxiety (Self)",
+        "Avoidance (Self)",
+        // ECR accuracy ratings (1-5)
+        "Anxiety Chat Accuracy",
+        "Anxiety Self Accuracy",
+        "Avoidance Chat Accuracy",
+        "Avoidance Self Accuracy",
         // Overall preference and feedback
-        "Overall Method Preference", 
-        "Feedback", 
-        "Submitted"
+        "Overall Method Preference",
+        "Feedback",
+        "Submitted",
       ];
 
-      const rows = filteredParticipants.map(p => {
+      const rows = filteredParticipants.map((p) => {
         const surveyResult = surveyResultsMap.get(p.id);
-        
+        const attachLlm = attachmentLlmMap.get(p.id);
+        const attachSelf = attachmentSelfMap.get(p.id);
+        const fmt = (n: unknown) =>
+          typeof n === "number" ? n.toFixed(2) : (n ?? "");
+
         return [
           p.respondent_id,
           p.name || "",
-          // Personality scores
+          p.assessment_type,
+          // Big Five scores
           getLlmScore(p.id, "openness"),
           getLlmScore(p.id, "conscientiousness"),
           getLlmScore(p.id, "extraversion"),
@@ -499,7 +472,7 @@ const Admin = () => {
           getIpipScore(p.id, "extraversion"),
           getIpipScore(p.id, "agreeableness"),
           getIpipScore(p.id, "neuroticism"),
-          // Trait-by-trait accuracy ratings
+          // Big Five accuracy ratings
           surveyResult?.openness_chat_accuracy ?? "",
           surveyResult?.openness_ipip_accuracy ?? "",
           surveyResult?.conscientiousness_chat_accuracy ?? "",
@@ -510,6 +483,16 @@ const Admin = () => {
           surveyResult?.agreeableness_ipip_accuracy ?? "",
           surveyResult?.neuroticism_chat_accuracy ?? "",
           surveyResult?.neuroticism_ipip_accuracy ?? "",
+          // ECR attachment scores
+          fmt(attachLlm ? Number(attachLlm.anxiety) : ""),
+          fmt(attachLlm ? Number(attachLlm.avoidance) : ""),
+          fmt(attachSelf ? Number(attachSelf.anxiety) : ""),
+          fmt(attachSelf ? Number(attachSelf.avoidance) : ""),
+          // ECR accuracy ratings
+          surveyResult?.anxiety_chat_accuracy ?? "",
+          surveyResult?.anxiety_self_accuracy ?? "",
+          surveyResult?.avoidance_chat_accuracy ?? "",
+          surveyResult?.avoidance_self_accuracy ?? "",
           // Overall preference and feedback
           surveyResult?.overall_method_preference ?? "",
           `"${(surveyResult?.feedback || "").replace(/"/g, '""')}"`,
@@ -857,6 +840,21 @@ const Admin = () => {
                           placeholder="Participant name"
                         />
                       </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="assessmentType">Assessment Track</Label>
+                        <Select
+                          value={newAssessmentType}
+                          onValueChange={(v) => setNewAssessmentType(v as AssessmentType)}
+                        >
+                          <SelectTrigger id="assessmentType">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="ecr">ECR-R (Attachment, 1 chat)</SelectItem>
+                            <SelectItem value="big5">Big Five (IPIP, 20 chats)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
                       <Button onClick={() => { addSingleParticipant(); setAddParticipantOpen(false); }} className="w-full">
                         <Plus className="mr-2 h-4 w-4" />
                         Add Participant
@@ -950,11 +948,12 @@ const Admin = () => {
                   </TableHead>
                   <TableHead>Respondent ID</TableHead>
                   <TableHead>Name</TableHead>
+                  <TableHead>Track</TableHead>
                   <TableHead>Session Link</TableHead>
                   <TableHead>Consent</TableHead>
                   <TableHead>Started</TableHead>
                   <TableHead>Chats</TableHead>
-                  <TableHead>IPIP</TableHead>
+                  <TableHead>Questionnaire</TableHead>
                   <TableHead>Submitted</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
@@ -972,6 +971,13 @@ const Admin = () => {
                     <TableCell className="font-mono">{p.respondent_id}</TableCell>
                     <TableCell>{p.name || "-"}</TableCell>
                     <TableCell>
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                        p.assessment_type === "ecr" ? "bg-amber-100 text-amber-900" : "bg-primary/10 text-primary"
+                      }`}>
+                        {p.assessment_type === "ecr" ? "ECR-R" : "Big5"}
+                      </span>
+                    </TableCell>
+                    <TableCell>
                       <button
                         onClick={() => copySessionLink(p.respondent_id)}
                         className="flex items-center gap-1.5 text-xs bg-muted px-2 py-1 rounded hover:bg-muted/80 transition-colors cursor-pointer"
@@ -986,8 +992,14 @@ const Admin = () => {
                     </TableCell>
                     <TableCell>{p.consent ? "✓" : "✗"}</TableCell>
                     <TableCell>{p.started ? "✓" : "✗"}</TableCell>
-                    <TableCell>{p.sessions_complete}/20</TableCell>
-                    <TableCell>{p.ipip_count}/50</TableCell>
+                    <TableCell>
+                      {p.sessions_complete}/{p.assessment_type === "ecr" ? 1 : 20}
+                    </TableCell>
+                    <TableCell>
+                      {p.assessment_type === "ecr"
+                        ? `${p.ecr_count}/36`
+                        : `${p.ipip_count}/50`}
+                    </TableCell>
                     <TableCell>{p.survey_submitted ? "✓" : "✗"}</TableCell>
                     <TableCell>
                       <Button
@@ -1013,25 +1025,48 @@ const Admin = () => {
           <CardHeader>
             <CardTitle>Chat Assessment</CardTitle>
             <CardDescription>
-              Configuration for the 20 conversational chat sessions
+              System prompts and questions for the conversational chat sessions (per track)
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-6">
-            <LLMPromptsOverview type="chat" />
-            <QuestionsOverview />
+          <CardContent>
+            <Tabs defaultValue="big5">
+              <TabsList>
+                <TabsTrigger value="big5">Big Five (20 sessions)</TabsTrigger>
+                <TabsTrigger value="ecr">ECR-R (1 session)</TabsTrigger>
+              </TabsList>
+              <TabsContent value="big5" className="space-y-6 pt-4">
+                <LLMPromptsOverview type="chat" assessmentId="big5" />
+                <QuestionsOverview assessmentId="big5" />
+              </TabsContent>
+              <TabsContent value="ecr" className="space-y-6 pt-4">
+                <LLMPromptsOverview type="chat" assessmentId="ecr" />
+                <QuestionsOverview assessmentId="ecr" />
+              </TabsContent>
+            </Tabs>
           </CardContent>
         </Card>
 
         {/* Scoring Section */}
         <Card>
           <CardHeader>
-            <CardTitle>Personality Scoring</CardTitle>
+            <CardTitle>LLM Scoring</CardTitle>
             <CardDescription>
-              Configuration for analyzing conversations and generating Big Five scores
+              System prompts used when scoring chat transcripts (per track)
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <LLMPromptsOverview type="scoring" />
+            <Tabs defaultValue="big5">
+              <TabsList>
+                <TabsTrigger value="big5">Big Five</TabsTrigger>
+                <TabsTrigger value="ecr">ECR-R (Attachment)</TabsTrigger>
+              </TabsList>
+              <TabsContent value="big5" className="pt-4">
+                <LLMPromptsOverview type="scoring" assessmentId="big5" />
+              </TabsContent>
+              <TabsContent value="ecr" className="pt-4">
+                <LLMPromptsOverview type="scoring" assessmentId="ecr" />
+              </TabsContent>
+            </Tabs>
           </CardContent>
         </Card>
 
@@ -1044,52 +1079,21 @@ const Admin = () => {
                   Manage administrator accounts
                 </CardDescription>
               </div>
-              <Dialog open={createAdminOpen} onOpenChange={setCreateAdminOpen}>
-                <DialogTrigger asChild>
-                  <Button variant="outline" size="sm">
-                    <UserPlus className="mr-2 h-4 w-4" />
-                    Create Admin
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Create Admin Account</DialogTitle>
-                    <DialogDescription>
-                      Add a new administrator to the system
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4 pt-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="adminEmail">Email</Label>
-                      <Input
-                        id="adminEmail"
-                        type="email"
-                        value={newAdminEmail}
-                        onChange={(e) => setNewAdminEmail(e.target.value)}
-                        placeholder="admin@example.com"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="adminPassword">Password</Label>
-                      <Input
-                        id="adminPassword"
-                        type="password"
-                        value={newAdminPassword}
-                        onChange={(e) => setNewAdminPassword(e.target.value)}
-                        placeholder="Min 6 characters"
-                      />
-                    </div>
-                    <Button onClick={() => { createAdminAccount(); setCreateAdminOpen(false); }} disabled={creatingAdmin} className="w-full">
-                      {creatingAdmin ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span tabIndex={0}>
+                      <Button variant="outline" size="sm" disabled>
                         <UserPlus className="mr-2 h-4 w-4" />
-                      )}
-                      Create Admin
-                    </Button>
-                  </div>
-                </DialogContent>
-              </Dialog>
+                        Create Admin
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    Create admin users via the Supabase dashboard, then add a row to <code>user_roles</code> with role <code>admin</code>.
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
           </CardHeader>
           <CardContent>
