@@ -274,17 +274,19 @@ ${messages}
 
     console.log(`Scoring conversations for participant ${id}`)
 
-    // Call Lovable AI Gateway (same setup as chat-conversation)
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    // Call Anthropic Messages API
+    const aiResponse = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${Deno.env.get("LOVABLE_API_KEY")}`,
-        "Content-Type": "application/json",
+        "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 4096,
+        system: SYSTEM_PROMPT,
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: conversationText }
         ],
         temperature: 0.3,
@@ -293,12 +295,12 @@ ${messages}
 
     if (!aiResponse.ok) {
       const errorText = await aiResponse.text()
-      console.error("AI Gateway error:", aiResponse.status, errorText)
-      throw new Error(`AI Gateway error: ${aiResponse.status}`)
+      console.error("Anthropic API error:", aiResponse.status, errorText)
+      throw new Error(`Anthropic API error: ${aiResponse.status}`)
     }
 
     const aiData = await aiResponse.json()
-    let responseText = aiData.choices[0].message.content
+    let responseText = aiData.content[0].text
 
     console.log("Raw AI response:", responseText.substring(0, 200))
 

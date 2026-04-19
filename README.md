@@ -8,7 +8,7 @@ Built as part of research at the University of Tartu.
 
 - **Frontend:** React 18, TypeScript, Vite, Tailwind CSS, shadcn/ui (Radix UI)
 - **Backend:** Supabase (PostgreSQL, Auth, Edge Functions)
-- **LLM:** Google Gemini 2.5 Flash via Lovable AI Gateway
+- **LLM:** Anthropic Claude Sonnet via Messages API
 - **State:** React Context (participant session), TanStack React Query (server state)
 - **Forms:** React Hook Form + Zod validation
 - **Charts:** Recharts (radar/bar comparison visualizations)
@@ -36,9 +36,9 @@ Built as part of research at the University of Tartu.
 │  Edge Functions     chat-conversation (LLM dialogue)        │
 │                     score-personality-unified (trait scoring)│
 └──────────────┬──────────────────────────────────────────────┘
-               │ Lovable AI Gateway
+               │ Anthropic Messages API
 ┌──────────────▼──────────────┐
-│  Google Gemini 2.5 Flash    │
+│  Claude Sonnet 4            │
 └─────────────────────────────┘
 ```
 
@@ -217,5 +217,5 @@ Server-side (edge functions):
 
 | Variable | Description |
 |---|---|
-| `LOVABLE_API_KEY` | API key for the Lovable AI Gateway (LLM proxy) |
+| `ANTHROPIC_API_KEY` | API key for the Anthropic Messages API |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role key for elevated database access |
