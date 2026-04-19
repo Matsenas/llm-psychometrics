@@ -25,3 +25,4 @@ bun.lockb
 *.sln
 *.sw?
 .env
+supabase/.temp
