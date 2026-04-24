@@ -25,6 +25,12 @@ function getUserIdFromJwt(authHeader: string | null): string | null {
   }
 }
 
+function extractJsonText(text: string): string {
+  const cleaned = text.replace(/```(?:json)?\s*/gi, '').replace(/\s*```$/g, '').trim();
+  const jsonMatch = cleaned.match(/(\{[\s\S]*\})/);
+  return jsonMatch ? jsonMatch[1] : cleaned;
+}
+
 const SYSTEM_PROMPT = `You are a psychological assessment expert specializing in Big Five personality profiling. Your task is to analyze conversation transcripts and generate accurate Big Five personality scores based on the IPIP (International Personality Item Pool) framework.
 
 ## INPUT
@@ -284,12 +290,12 @@ ${messages}
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 4096,
-        system: SYSTEM_PROMPT,
+        max_tokens_to_sample: 4096,
+        temperature: 0.3,
         messages: [
+          { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: conversationText }
         ],
-        temperature: 0.3,
       }),
     })
 
@@ -304,11 +310,8 @@ ${messages}
 
     console.log("Raw AI response:", responseText.substring(0, 200))
 
-    // Clean any markdown formatting
-    responseText = responseText
-      .replace(/```json\n?/g, '')
-      .replace(/```\n?/g, '')
-      .trim()
+    // Clean any markdown formatting and extract the JSON payload
+    responseText = extractJsonText(responseText)
 
     // Parse and validate JSON
     let scores

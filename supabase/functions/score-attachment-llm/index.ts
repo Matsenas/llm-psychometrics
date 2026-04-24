@@ -20,6 +20,12 @@ function getUserIdFromJwt(authHeader: string | null): string | null {
   }
 }
 
+function extractJsonText(text: string): string {
+  const cleaned = text.replace(/```(?:json)?\s*/gi, '').replace(/\s*```$/g, '').trim();
+  const jsonMatch = cleaned.match(/(\{[\s\S]*\})/);
+  return jsonMatch ? jsonMatch[1] : cleaned;
+}
+
 // TODO(research-team): final rubric anchors and scoring guidance should be reviewed
 // by the research team. These are MVP defaults aligned with the ECR-R 1-7 Likert scale.
 const SCORING_PROMPT = `You are a careful scorer of adult attachment in close relationships. You will read a single-session conversation where someone reflects on a recent relationship difficulty. Produce anxiety and avoidance scores on the ECR-R 1-7 scale based only on what the participant explicitly said or showed.
@@ -187,10 +193,10 @@ serve(async (req) => {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 4096,
+        max_tokens_to_sample: 4096,
         temperature: 0.3,
-        system: SCORING_PROMPT,
         messages: [
+          { role: "system", content: SCORING_PROMPT },
           {
             role: "user",
             content:
@@ -208,7 +214,7 @@ serve(async (req) => {
 
     const scoreData = await scoreResponse.json();
     const raw = scoreData.content[0].text as string;
-    const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+    const cleaned = extractJsonText(raw);
 
     let parsed: unknown;
     try {

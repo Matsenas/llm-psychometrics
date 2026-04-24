@@ -132,9 +132,12 @@ serve(async (req) => {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 1024,
-        system: SYSTEM_PROMPT,
-        messages: conversationHistory,
+        max_tokens_to_sample: 1024,
+        temperature: 0.3,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          ...conversationHistory,
+        ],
       }),
     });
 

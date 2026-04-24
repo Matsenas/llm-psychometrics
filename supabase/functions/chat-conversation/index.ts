@@ -312,9 +312,12 @@ Brief—about 2-2.5 minutes total. Opening question, then at most ONE follow-up.
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 1024,
-        system: systemPrompt,
-        messages: conversationHistory,
+        max_tokens_to_sample: 1024,
+        temperature: 0.3,
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...conversationHistory,
+        ],
       }),
     });
 
