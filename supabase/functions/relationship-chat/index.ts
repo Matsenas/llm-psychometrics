@@ -6,18 +6,42 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+function decodeBase64Url(value: string): string {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padding = base64.length % 4;
+  if (padding === 2) return atob(base64 + "==");
+  if (padding === 3) return atob(base64 + "=");
+  if (padding === 0) return atob(base64);
+  throw new Error("Invalid base64url string");
+}
+
 function getUserIdFromJwt(authHeader: string | null): string | null {
   if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
   try {
     const token = authHeader.replace("Bearer ", "");
     const parts = token.split(".");
     if (parts.length !== 3) return null;
-    const payload = JSON.parse(atob(parts[1]));
+    const payload = JSON.parse(decodeBase64Url(parts[1]));
     return payload.sub || null;
   } catch (e) {
     console.error("JWT decode error:", e);
     return null;
   }
+}
+
+function getAnthropicText(response: any): string {
+  if (!response) throw new Error("Missing Anthropic response body");
+  if (typeof response?.content?.[0]?.text === "string" && response.content[0].text.trim()) {
+    return response.content[0].text;
+  }
+  if (typeof response?.completion === "string" && response.completion.trim()) {
+    return response.completion;
+  }
+  if (typeof response?.text === "string" && response.text.trim()) {
+    return response.text;
+  }
+  console.error("Unexpected Anthropic response shape:", response);
+  throw new Error("Unexpected Anthropic response format");
 }
 
 // TODO(research-team): final copy for opener, probing guidance, tone, and exit
@@ -57,11 +81,16 @@ serve(async (req) => {
   }
 
   try {
+    console.log("relationship-chat: Received request");
     const { sessionId, userMessage } = await req.json();
+    console.log("relationship-chat: Parsed body", { sessionId, userMessageLength: userMessage?.length });
 
     const authHeader = req.headers.get("Authorization");
+    console.log("relationship-chat: Auth header present:", !!authHeader);
     const jwtUserId = getUserIdFromJwt(authHeader);
+    console.log("relationship-chat: JWT user ID:", jwtUserId);
     if (!jwtUserId) {
+      console.log("relationship-chat: Unauthorized - no JWT user ID");
       return new Response(
         JSON.stringify({ error: "Unauthorized: Missing or invalid authorization" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -80,11 +109,13 @@ serve(async (req) => {
       .single();
 
     if (sessionError || !session) {
+      console.log("relationship-chat: Session error:", sessionError);
       return new Response(
         JSON.stringify({ error: "Session not found" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
+    console.log("relationship-chat: Found session for participant:", session.participant_id);
 
     const { data: participant, error: participantError } = await supabase
       .from("participants")
@@ -93,13 +124,16 @@ serve(async (req) => {
       .single();
 
     if (participantError || !participant) {
+      console.log("relationship-chat: Participant error:", participantError);
       return new Response(
         JSON.stringify({ error: "Participant not found" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
+    console.log("relationship-chat: Found participant:", { user_id: participant.user_id, assessment_type: participant.assessment_type });
 
     if (participant.user_id !== jwtUserId) {
+      console.log("relationship-chat: User ID mismatch:", { participantUserId: participant.user_id, jwtUserId });
       return new Response(
         JSON.stringify({ error: "Unauthorized: You do not own this session" }),
         { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -108,57 +142,88 @@ serve(async (req) => {
 
     // Defence in depth: only ECR participants may use this endpoint.
     if (participant.assessment_type !== "ecr") {
+      console.log("relationship-chat: Wrong assessment type:", participant.assessment_type);
       return new Response(
         JSON.stringify({ error: "Wrong assessment track for this endpoint" }),
         { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
+    console.log("relationship-chat: Assessment type check passed");
 
+    console.log("relationship-chat: Querying chat_messages for session:", sessionId);
     const { data: messages } = await supabase
       .from("chat_messages")
       .select("*")
       .eq("session_id", sessionId)
       .order("created_at", { ascending: true });
 
+    console.log("relationship-chat: Retrieved messages from DB:", messages?.length || 0);
+
     const conversationHistory = (messages ?? []).map((m) => ({ role: m.role, content: m.content }));
     conversationHistory.push({ role: "user", content: userMessage });
+    console.log("relationship-chat: Conversation history length:", conversationHistory.length);
 
-    const aiResponse = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens_to_sample: 1024,
-        temperature: 0.3,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          ...conversationHistory,
-        ],
-      }),
-    });
-
-    if (!aiResponse.ok) {
-      const errorText = await aiResponse.text();
-      console.error("Anthropic API error:", aiResponse.status, errorText);
-      throw new Error(`Anthropic API error: ${aiResponse.status}`);
+    console.log("relationship-chat: Calling Anthropic API");
+    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+    console.log("relationship-chat: API key present:", !!apiKey);
+    if (!apiKey) {
+      console.log("relationship-chat: No ANTHROPIC_API_KEY set");
+      return new Response(
+        JSON.stringify({ error: "Anthropic API key not configured in Supabase environment variables" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
-    const aiData = await aiResponse.json();
-    const assistantMessage = aiData.content[0].text as string;
+    try {
+      const aiResponse = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1024,
+          temperature: 0.3,
+          system: SYSTEM_PROMPT,
+          messages: conversationHistory,
+        }),
+      });
 
-    const hasCompletionTag = assistantMessage.includes("[CONVERSATION_COMPLETE]");
-    const cleanMessage = assistantMessage.replace("[CONVERSATION_COMPLETE]", "").trim();
+      console.log("relationship-chat: Anthropic API response status:", aiResponse.status);
+      if (!aiResponse.ok) {
+        const errorText = await aiResponse.text();
+        console.error("relationship-chat: Anthropic API error response:", errorText);
+        return new Response(
+          JSON.stringify({ error: `Anthropic API error: ${aiResponse.status} - ${errorText}` }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
 
-    return new Response(
-      JSON.stringify({ response: cleanMessage, shouldEnd: hasCompletionTag }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+      const aiData = await aiResponse.json();
+      console.log("relationship-chat: Anthropic response received, parsing...");
+      const assistantMessage = getAnthropicText(aiData);
+      console.log("relationship-chat: Assistant message length:", assistantMessage.length);
+
+      const hasCompletionTag = assistantMessage.includes("[CONVERSATION_COMPLETE]");
+      const cleanMessage = assistantMessage.replace("[CONVERSATION_COMPLETE]", "").trim();
+      console.log("relationship-chat: Completion tag found:", hasCompletionTag);
+
+      console.log("relationship-chat: Returning success response");
+      return new Response(
+        JSON.stringify({ response: cleanMessage, shouldEnd: hasCompletionTag }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    } catch (anthropicError) {
+      console.error("relationship-chat: Error in Anthropic API section:", anthropicError);
+      return new Response(
+        JSON.stringify({ error: `Anthropic API error: ${anthropicError instanceof Error ? anthropicError.message : 'Unknown error'}` }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
   } catch (error) {
-    console.error("Error in relationship-chat:", error);
+    console.error("relationship-chat: Error in function:", error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },

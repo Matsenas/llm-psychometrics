@@ -62,7 +62,7 @@ function triggerConfetti(): void {
 export function EcrChatRunner() {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { participant, isLoading: participantLoading } = useParticipant();
+  const { participant, isLoading: participantLoading, session } = useParticipant();
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -192,11 +192,28 @@ export function EcrChatRunner() {
         });
       }
 
-      const { data, error } = await supabase.functions.invoke("relationship-chat", {
-        body: { sessionId, userMessage: messageToSend },
+      // Use direct fetch to get proper error handling
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/relationship-chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`,
+          'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({ sessionId, userMessage: messageToSend }),
       });
 
-      if (error) throw error;
+      const data = await response.json();
+
+      if (!response.ok) {
+        // Extract error message from response body if available
+        const errorMessage = data?.error || `HTTP ${response.status}: ${response.statusText}`;
+        throw new Error(errorMessage);
+      }
+
+      if (!data || !data.response) {
+        throw new Error("Invalid response from chat service");
+      }
 
       setMessages((prev) => [...prev, { role: "assistant", content: data.response }]);
       await supabase.from("chat_messages").insert({
@@ -217,9 +234,12 @@ export function EcrChatRunner() {
     } catch (error) {
       console.error("Chat error:", error);
       setLastFailedMessage(messageToSend);
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const errorDetails = error?.message || error?.error || JSON.stringify(error);
+      console.error("Full error details:", errorDetails);
       toast({
         title: "Connection Issue",
-        description: "The AI service is temporarily unavailable. Please try again.",
+        description: `AI service error: ${errorMessage}`,
         variant: "destructive",
       });
     } finally {
