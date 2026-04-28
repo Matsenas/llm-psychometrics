@@ -7,6 +7,15 @@ const corsHeaders = {
 };
 
 // Helper to decode JWT and extract user_id
+function decodeBase64Url(value: string): string {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padding = base64.length % 4;
+  if (padding === 2) return atob(base64 + "==");
+  if (padding === 3) return atob(base64 + "=");
+  if (padding === 0) return atob(base64);
+  throw new Error("Invalid base64url string");
+}
+
 function getUserIdFromJwt(authHeader: string | null): string | null {
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return null;
@@ -15,14 +24,28 @@ function getUserIdFromJwt(authHeader: string | null): string | null {
     const token = authHeader.replace('Bearer ', '');
     const parts = token.split('.');
     if (parts.length !== 3) return null;
-    
-    // Decode the payload (second part)
-    const payload = JSON.parse(atob(parts[1]));
+
+    const payload = JSON.parse(decodeBase64Url(parts[1]));
     return payload.sub || null;
   } catch (e) {
     console.error("JWT decode error:", e);
     return null;
   }
+}
+
+function getAnthropicText(response: any): string {
+  if (!response) throw new Error("Missing Anthropic response body");
+  if (typeof response?.content?.[0]?.text === "string" && response.content[0].text.trim()) {
+    return response.content[0].text;
+  }
+  if (typeof response?.completion === "string" && response.completion.trim()) {
+    return response.completion;
+  }
+  if (typeof response?.text === "string" && response.text.trim()) {
+    return response.text;
+  }
+  console.error("Unexpected Anthropic response shape:", response);
+  throw new Error("Unexpected Anthropic response format");
 }
 
 serve(async (req) => {
@@ -311,10 +334,13 @@ Brief—about 2-2.5 minutes total. Opening question, then at most ONE follow-up.
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-3-5-sonnet-20241022",
         max_tokens: 1024,
-        system: systemPrompt,
-        messages: conversationHistory,
+        temperature: 0.3,
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...conversationHistory,
+        ],
       }),
     });
 
@@ -325,7 +351,7 @@ Brief—about 2-2.5 minutes total. Opening question, then at most ONE follow-up.
     }
 
     const aiData = await aiResponse.json();
-    const assistantMessage = aiData.content[0].text;
+    const assistantMessage = getAnthropicText(aiData);
 
     // Check if conversation should end
     const hasCompletionTag = assistantMessage.includes("[CONVERSATION_COMPLETE]");

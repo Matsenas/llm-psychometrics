@@ -6,18 +6,33 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+function decodeBase64Url(value: string): string {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padding = base64.length % 4;
+  if (padding === 2) return atob(base64 + "==");
+  if (padding === 3) return atob(base64 + "=");
+  if (padding === 0) return atob(base64);
+  throw new Error("Invalid base64url string");
+}
+
 function getUserIdFromJwt(authHeader: string | null): string | null {
   if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
   try {
     const token = authHeader.replace("Bearer ", "");
     const parts = token.split(".");
     if (parts.length !== 3) return null;
-    const payload = JSON.parse(atob(parts[1]));
+    const payload = JSON.parse(decodeBase64Url(parts[1]));
     return payload.sub || null;
   } catch (e) {
     console.error("JWT decode error:", e);
     return null;
   }
+}
+
+function extractJsonText(text: string): string {
+  const cleaned = text.replace(/```(?:json)?\s*/gi, '').replace(/\s*```$/g, '').trim();
+  const jsonMatch = cleaned.match(/(\{[\s\S]*\})/);
+  return jsonMatch ? jsonMatch[1] : cleaned;
 }
 
 // TODO(research-team): final rubric anchors and scoring guidance should be reviewed
@@ -186,11 +201,11 @@ serve(async (req) => {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-3-5-sonnet-20241022",
         max_tokens: 4096,
         temperature: 0.3,
-        system: SCORING_PROMPT,
         messages: [
+          { role: "system", content: SCORING_PROMPT },
           {
             role: "user",
             content:
@@ -208,7 +223,7 @@ serve(async (req) => {
 
     const scoreData = await scoreResponse.json();
     const raw = scoreData.content[0].text as string;
-    const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+    const cleaned = extractJsonText(raw);
 
     let parsed: unknown;
     try {

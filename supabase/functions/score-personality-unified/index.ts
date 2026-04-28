@@ -7,6 +7,15 @@ const corsHeaders = {
 }
 
 // Helper to decode JWT and extract user_id
+function decodeBase64Url(value: string): string {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padding = base64.length % 4;
+  if (padding === 2) return atob(base64 + "==");
+  if (padding === 3) return atob(base64 + "=");
+  if (padding === 0) return atob(base64);
+  throw new Error("Invalid base64url string");
+}
+
 function getUserIdFromJwt(authHeader: string | null): string | null {
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return null;
@@ -16,13 +25,18 @@ function getUserIdFromJwt(authHeader: string | null): string | null {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
     
-    // Decode the payload (second part)
-    const payload = JSON.parse(atob(parts[1]));
+    const payload = JSON.parse(decodeBase64Url(parts[1]));
     return payload.sub || null;
   } catch (e) {
     console.error("JWT decode error:", e);
     return null;
   }
+}
+
+function extractJsonText(text: string): string {
+  const cleaned = text.replace(/```(?:json)?\s*/gi, '').replace(/\s*```$/g, '').trim();
+  const jsonMatch = cleaned.match(/(\{[\s\S]*\})/);
+  return jsonMatch ? jsonMatch[1] : cleaned;
 }
 
 const SYSTEM_PROMPT = `You are a psychological assessment expert specializing in Big Five personality profiling. Your task is to analyze conversation transcripts and generate accurate Big Five personality scores based on the IPIP (International Personality Item Pool) framework.
@@ -283,13 +297,13 @@ ${messages}
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-3-5-sonnet-20241022",
         max_tokens: 4096,
-        system: SYSTEM_PROMPT,
+        temperature: 0.3,
         messages: [
+          { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: conversationText }
         ],
-        temperature: 0.3,
       }),
     })
 
@@ -304,11 +318,8 @@ ${messages}
 
     console.log("Raw AI response:", responseText.substring(0, 200))
 
-    // Clean any markdown formatting
-    responseText = responseText
-      .replace(/```json\n?/g, '')
-      .replace(/```\n?/g, '')
-      .trim()
+    // Clean any markdown formatting and extract the JSON payload
+    responseText = extractJsonText(responseText)
 
     // Parse and validate JSON
     let scores
