@@ -73,17 +73,17 @@ const ParticipantHeader = ({ hasSubmitted = false }: ParticipantHeaderProps) => 
               <div className="space-y-3">
                 <p>
                   Are you sure you want to end your session? Your progress will be saved, 
-                  but you will need to re-enter your ID to continue.
+                  but you will need to sign in again to continue.
                 </p>
-                <p>Your ID:</p>
+                <p>{participant.email ? "Your email:" : "Your ID:"}</p>
                 <div className="flex items-center gap-2 p-2 bg-muted rounded-md">
-                  <span className="font-medium text-foreground">{participant?.respondent_id}</span>
+                  <span className="font-medium text-foreground">{participant?.email || participant?.respondent_id}</span>
                   <Button
                     variant="ghost"
                     size="sm"
                     className="h-7 w-7 p-0"
                     onClick={() => {
-                      navigator.clipboard.writeText(participant?.respondent_id || "");
+                      navigator.clipboard.writeText(participant?.email || participant?.respondent_id || "");
                       setCopied(true);
                       setTimeout(() => setCopied(false), 2000);
                     }}

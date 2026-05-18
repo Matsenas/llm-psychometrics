@@ -12,7 +12,11 @@ import { calculateBig5Scores } from "@/lib/calculateBig5";
 import ComparisonOverview from "@/components/ComparisonOverview";
 import AttachmentQuadrantOverview from "@/components/ecr/AttachmentQuadrantOverview";
 import { getAttachmentStyleInfo, classifyAttachment } from "@/lib/attachmentClassification";
-import type { AssessmentType } from "@/contexts/ParticipantContext";
+import { getCurrentAdmin } from "@/lib/adminAuth";
+import {
+  RELATIONSHIP_USABILITY_REQUIRED_ITEMS,
+  countRelationshipUsabilityRequiredResponses,
+} from "@/lib/usabilityInstruments";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,9 +33,12 @@ interface ParticipantInfo {
   id: string;
   respondent_id: string;
   name: string | null;
+  email: string | null;
   created_at: string;
   disabled: boolean;
-  assessment_type: AssessmentType;
+  active_study_name?: string | null;
+  active_study_slug?: string | null;
+  active_study_version?: number | null;
 }
 
 interface AttachmentMethodScore {
@@ -44,7 +51,8 @@ interface ProgressData {
   started: boolean;
   sessions_complete: number;
   ipip_count: number;
-  ecr_count: number;
+  usability_count: number;
+  profile_ready: boolean;
   accuracy_count: number;
   accuracy_complete: boolean;
   survey_submitted: boolean;
@@ -91,6 +99,20 @@ interface SurveyResults {
   neuroticism_ipip_accuracy: number | null;
 }
 
+interface StudyJoin {
+  slug?: string | null;
+  name?: string | null;
+}
+
+interface AssignmentStudyVersionRow {
+  version_number?: number | null;
+  studies?: StudyJoin | StudyJoin[] | null;
+}
+
+interface AssignmentRow {
+  study_versions?: AssignmentStudyVersionRow | AssignmentStudyVersionRow[] | null;
+}
+
 interface ChatSession {
   id: string;
   session_number: number;
@@ -108,6 +130,20 @@ interface ChatMessage {
   created_at: string;
 }
 
+function firstJoin<T>(value: T | T[] | null | undefined): T | null {
+  return Array.isArray(value) ? value[0] ?? null : value ?? null;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unexpected error";
+}
+
+function nestedScore(value: unknown): number {
+  if (!value || typeof value !== "object" || !("score" in value)) return 0;
+  const score = (value as { score?: unknown }).score;
+  return typeof score === "number" ? score : 0;
+}
+
 const ParticipantDetails = () => {
   const { respondentId } = useParams<{ respondentId: string }>();
   const [loading, setLoading] = useState(true);
@@ -118,7 +154,6 @@ const ParticipantDetails = () => {
   const [surveyResults, setSurveyResults] = useState<SurveyResults | null>(null);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [attachmentLlm, setAttachmentLlm] = useState<AttachmentMethodScore | null>(null);
-  const [attachmentSelf, setAttachmentSelf] = useState<AttachmentMethodScore | null>(null);
   const [expandedTraits, setExpandedTraits] = useState<Record<string, boolean>>({});
   const [expandedSessions, setExpandedSessions] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
@@ -130,20 +165,13 @@ const ParticipantDetails = () => {
 
   const checkAdminAndLoad = async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
+      const admin = await getCurrentAdmin();
+      if (!admin.session) {
         navigate("/auth");
         return;
       }
 
-      const { data: roleData } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", session.user.id)
-        .eq("role", "admin")
-        .maybeSingle();
-
-      if (!roleData) {
+      if (!admin.isAdmin) {
         navigate("/");
         return;
       }
@@ -176,16 +204,32 @@ const ParticipantDetails = () => {
         return;
       }
 
-      setParticipant({
-        ...participantData,
-        disabled: participantData.disabled ?? false,
-        assessment_type: (participantData.assessment_type as AssessmentType) ?? "big5",
-      });
       const participantId = participantData.id;
 
+      const { data: assignmentData } = await supabase
+        .from("participant_study_assignments")
+        .select("study_versions(version_number, studies(slug, name))")
+        .eq("participant_id", participantId)
+        .in("status", ["active", "completed"])
+        .order("assigned_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const activeVersion = firstJoin((assignmentData as AssignmentRow | null)?.study_versions);
+      const activeStudy = firstJoin(activeVersion?.studies);
+
+      setParticipant({
+        ...participantData,
+        email: participantData.email ?? null,
+        disabled: participantData.disabled ?? false,
+        active_study_name: activeStudy?.name ?? null,
+        active_study_slug: activeStudy?.slug ?? null,
+        active_study_version: activeVersion?.version_number ?? null,
+      });
+
+      const isRelationshipStudy =
+        activeStudy?.slug === "relationship_patterns_cuq_sus_plausibility";
+
       // Load all data in parallel using the participant's internal ID.
-      // ECR tables (ecr_responses, attachment_scores) are fetched regardless; they
-      // return zero rows for Big Five participants.
       const [
         consent,
         anySessions,
@@ -195,9 +239,8 @@ const ParticipantDetails = () => {
         llmScores,
         ipipStoredScores,
         sessionsData,
-        ecrResponses,
-        attachmentLlmResult,
-        attachmentSelfResult,
+        usabilityResponses,
+        classificationSummaryResult,
       ] = await Promise.all([
         supabase.from("consent_responses").select("id").eq("participant_id", participantId).limit(1),
         supabase.from("chat_sessions").select("id").eq("participant_id", participantId).limit(1),
@@ -207,29 +250,23 @@ const ParticipantDetails = () => {
         supabase.from("personality_scores").select("*").eq("participant_id", participantId).eq("method", "llm").maybeSingle(),
         supabase.from("personality_scores").select("*").eq("participant_id", participantId).eq("method", "ipip").maybeSingle(),
         supabase.from("chat_sessions").select("*").eq("participant_id", participantId).order("session_number"),
-        supabase.from("ecr_responses").select("id").eq("participant_id", participantId),
-        supabase.from("attachment_scores").select("anxiety, avoidance").eq("participant_id", participantId).eq("method", "llm").maybeSingle(),
-        supabase.from("attachment_scores").select("anxiety, avoidance").eq("participant_id", participantId).eq("method", "self").maybeSingle(),
+        supabase.from("usability_responses").select("item_key, response_value").eq("participant_id", participantId),
+        supabase
+          .from("attachment_classification_summaries")
+          .select("mean_anxiety, mean_avoidance")
+          .eq("participant_id", participantId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
       ]);
 
-      const assessmentType = (participantData.assessment_type as AssessmentType) ?? "big5";
-      const ecrCount = ecrResponses.data?.length || 0;
-
-      if (attachmentLlmResult.data) {
+      if (classificationSummaryResult.data) {
         setAttachmentLlm({
-          anxiety: Number(attachmentLlmResult.data.anxiety),
-          avoidance: Number(attachmentLlmResult.data.avoidance),
-        });
-      }
-      if (attachmentSelfResult.data) {
-        setAttachmentSelf({
-          anxiety: Number(attachmentSelfResult.data.anxiety),
-          avoidance: Number(attachmentSelfResult.data.avoidance),
+          anxiety: Number(classificationSummaryResult.data.mean_anxiety),
+          avoidance: Number(classificationSummaryResult.data.mean_avoidance),
         });
       }
 
-      // Accuracy completeness depends on assessment_type. Big Five: 10 ratings (5x2).
-      // ECR: 4 ratings (2x2).
       const big5AccuracyFields = [
         results.data?.openness_chat_accuracy,
         results.data?.openness_ipip_accuracy,
@@ -242,36 +279,33 @@ const ParticipantDetails = () => {
         results.data?.neuroticism_chat_accuracy,
         results.data?.neuroticism_ipip_accuracy,
       ];
-      const ecrAccuracyFields = [
-        results.data?.anxiety_chat_accuracy,
-        results.data?.anxiety_self_accuracy,
-        results.data?.avoidance_chat_accuracy,
-        results.data?.avoidance_self_accuracy,
-      ];
-      const accuracyFields = assessmentType === "ecr" ? ecrAccuracyFields : big5AccuracyFields;
-      const accuracyCount = accuracyFields.filter((v) => v !== null && v !== undefined).length;
-      const accuracyTarget = assessmentType === "ecr" ? 4 : 10;
-      const accuracyComplete = accuracyCount === accuracyTarget;
+      const accuracyCount = isRelationshipStudy
+        ? 0
+        : big5AccuracyFields.filter((v) => v !== null && v !== undefined).length;
+      const usabilityCount = countRelationshipUsabilityRequiredResponses(usabilityResponses.data ?? []);
 
       setProgress({
         consent: (consent.data?.length || 0) > 0,
         started: (anySessions.data?.length || 0) > 0,
         sessions_complete: completedSessions.data?.length || 0,
         ipip_count: ipipResponses.data?.length || 0,
-        ecr_count: ecrCount,
+        usability_count: usabilityCount,
+        profile_ready: !!classificationSummaryResult.data,
         accuracy_count: accuracyCount,
-        accuracy_complete: accuracyComplete,
-        survey_submitted: results.data?.submitted || false,
+        accuracy_complete: isRelationshipStudy ? true : accuracyCount === 10,
+        survey_submitted: isRelationshipStudy
+          ? usabilityCount >= RELATIONSHIP_USABILITY_REQUIRED_ITEMS
+          : results.data?.submitted || false,
       });
 
       // Load IPIP scores from personality_scores (with fallback to calculation)
       if (ipipStoredScores.data) {
         setIpipScores({
-          openness: (ipipStoredScores.data.openness as any).score,
-          conscientiousness: (ipipStoredScores.data.conscientiousness as any).score,
-          extraversion: (ipipStoredScores.data.extraversion as any).score,
-          agreeableness: (ipipStoredScores.data.agreeableness as any).score,
-          neuroticism: (ipipStoredScores.data.neuroticism as any).score,
+          openness: nestedScore(ipipStoredScores.data.openness),
+          conscientiousness: nestedScore(ipipStoredScores.data.conscientiousness),
+          extraversion: nestedScore(ipipStoredScores.data.extraversion),
+          agreeableness: nestedScore(ipipStoredScores.data.agreeableness),
+          neuroticism: nestedScore(ipipStoredScores.data.neuroticism),
         });
       } else if (ipipResponses.data && ipipResponses.data.length > 0) {
         // Fallback: calculate from responses
@@ -329,10 +363,10 @@ const ParticipantDetails = () => {
         );
         setChatSessions(sessionsWithMessages);
       }
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Error",
-        description: error.message,
+        description: errorMessage(error),
         variant: "destructive",
       });
     } finally {
@@ -344,13 +378,37 @@ const ParticipantDetails = () => {
     if (!participant) return;
 
     try {
+      const { data: assignments } = await supabase
+        .from("participant_study_assignments")
+        .select("id")
+        .eq("participant_id", participant.id);
+      const assignmentIds = assignments?.map((assignment) => assignment.id) || [];
+
       // Get counts before deletion
-      const [sessionsCount, ipipCount, consentCount, scoresCount, surveyCount] = await Promise.all([
+      const [
+        sessionsCount,
+        ipipCount,
+        consentCount,
+        scoresCount,
+        surveyCount,
+        attachmentScoresCount,
+        classificationRunsCount,
+        classificationSummariesCount,
+        usabilityCount,
+        blockProgressCount,
+      ] = await Promise.all([
         supabase.from("chat_sessions").select("id", { count: "exact", head: true }).eq("participant_id", participant.id),
         supabase.from("ipip_responses").select("id", { count: "exact", head: true }).eq("participant_id", participant.id),
         supabase.from("consent_responses").select("id", { count: "exact", head: true }).eq("participant_id", participant.id),
         supabase.from("personality_scores").select("id", { count: "exact", head: true }).eq("participant_id", participant.id),
         supabase.from("survey_results").select("id", { count: "exact", head: true }).eq("participant_id", participant.id),
+        supabase.from("attachment_scores").select("id", { count: "exact", head: true }).eq("participant_id", participant.id),
+        supabase.from("attachment_classification_runs").select("id", { count: "exact", head: true }).eq("participant_id", participant.id),
+        supabase.from("attachment_classification_summaries").select("id", { count: "exact", head: true }).eq("participant_id", participant.id),
+        supabase.from("usability_responses").select("id", { count: "exact", head: true }).eq("participant_id", participant.id),
+        assignmentIds.length > 0
+          ? supabase.from("study_block_progress").select("id", { count: "exact", head: true }).in("assignment_id", assignmentIds)
+          : Promise.resolve({ count: 0 }),
       ]);
 
       // Get chat sessions for message deletion
@@ -372,15 +430,25 @@ const ParticipantDetails = () => {
         await supabase.from("chat_sessions").delete().eq("participant_id", participant.id);
       }
 
-      // Delete remaining data (includes ECR-specific tables; no-op for Big Five participants).
-      await Promise.all([
+      // Delete remaining participant data, including legacy self-report tables when present.
+      const resetDeletes = [
         supabase.from("survey_results").delete().eq("participant_id", participant.id),
         supabase.from("personality_scores").delete().eq("participant_id", participant.id),
         supabase.from("attachment_scores").delete().eq("participant_id", participant.id),
+        supabase.from("attachment_classification_runs").delete().eq("participant_id", participant.id),
+        supabase.from("attachment_classification_summaries").delete().eq("participant_id", participant.id),
+        supabase.from("usability_responses").delete().eq("participant_id", participant.id),
         supabase.from("ipip_responses").delete().eq("participant_id", participant.id),
-        supabase.from("ecr_responses").delete().eq("participant_id", participant.id),
         supabase.from("consent_responses").delete().eq("participant_id", participant.id),
-      ]);
+      ];
+
+      if (assignmentIds.length > 0) {
+        resetDeletes.push(
+          supabase.from("study_block_progress").delete().in("assignment_id", assignmentIds)
+        );
+      }
+
+      await Promise.all(resetDeletes);
 
       // Build deletion summary
       const deletedItems: string[] = [];
@@ -388,6 +456,11 @@ const ParticipantDetails = () => {
       if (messagesDeleted) deletedItems.push(`${messagesDeleted} messages`);
       if (ipipCount.count) deletedItems.push(`${ipipCount.count} IPIP responses`);
       if (scoresCount.count) deletedItems.push(`${scoresCount.count} personality scores`);
+      if (attachmentScoresCount.count) deletedItems.push(`${attachmentScoresCount.count} attachment scores`);
+      if (classificationRunsCount.count) deletedItems.push(`${classificationRunsCount.count} classification runs`);
+      if (classificationSummariesCount.count) deletedItems.push(`${classificationSummariesCount.count} classification summaries`);
+      if (usabilityCount.count) deletedItems.push(`${usabilityCount.count} usability responses`);
+      if (blockProgressCount.count) deletedItems.push(`${blockProgressCount.count} study progress rows`);
       if (consentCount.count) deletedItems.push("consent");
       if (surveyCount.count) deletedItems.push("survey results");
 
@@ -401,10 +474,10 @@ const ParticipantDetails = () => {
       });
 
       await loadParticipantData();
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Error",
-        description: error.message,
+        description: errorMessage(error),
         variant: "destructive",
       });
     }
@@ -431,10 +504,10 @@ const ParticipantDetails = () => {
           ? `${participant.name || participant.respondent_id} can no longer access the experiment.`
           : `${participant.name || participant.respondent_id} can now access the experiment.`,
       });
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Error",
-        description: error.message,
+        description: errorMessage(error),
         variant: "destructive",
       });
     }
@@ -465,31 +538,48 @@ const ParticipantDetails = () => {
     return null;
   }
 
-  const isEcr = participant.assessment_type === "ecr";
-  const chatTarget = isEcr ? 1 : 20;
-  const questionnaireTarget = isEcr ? 36 : 50;
-  const questionnaireCount = isEcr ? progress.ecr_count : progress.ipip_count;
-  const accuracyTarget = isEcr ? 4 : 10;
-  const steps = [
-    { label: "Consent", complete: progress.consent },
-    { label: "Started", complete: progress.started },
-    {
-      label: isEcr ? "Chat" : "Chats",
-      complete: progress.sessions_complete === chatTarget,
-      detail: `${progress.sessions_complete}/${chatTarget}`,
-    },
-    {
-      label: isEcr ? "ECR-R" : "IPIP",
-      complete: questionnaireCount === questionnaireTarget,
-      detail: `${questionnaireCount}/${questionnaireTarget}`,
-    },
-    {
-      label: "Accuracy",
-      complete: progress.accuracy_complete,
-      detail: `${progress.accuracy_count}/${accuracyTarget}`,
-    },
-    { label: "Submitted", complete: progress.survey_submitted },
-  ];
+  const isRelationshipStudy =
+    participant.active_study_slug === "relationship_patterns_cuq_sus_plausibility";
+  const chatTarget = isRelationshipStudy ? 1 : 20;
+  const questionnaireTarget = isRelationshipStudy ? RELATIONSHIP_USABILITY_REQUIRED_ITEMS : 50;
+  const questionnaireCount = isRelationshipStudy ? progress.usability_count : progress.ipip_count;
+  const steps = isRelationshipStudy
+    ? [
+        { label: "Consent", complete: progress.consent },
+        { label: "Started", complete: progress.started },
+        {
+          label: "Interview",
+          complete: progress.sessions_complete === chatTarget,
+          detail: `${progress.sessions_complete}/${chatTarget}`,
+        },
+        { label: "Profile", complete: progress.profile_ready },
+        {
+          label: "Usability",
+          complete: questionnaireCount >= questionnaireTarget,
+          detail: `${questionnaireCount}/${questionnaireTarget}`,
+        },
+        { label: "Complete", complete: progress.survey_submitted },
+      ]
+    : [
+        { label: "Consent", complete: progress.consent },
+        { label: "Started", complete: progress.started },
+        {
+          label: "Chats",
+          complete: progress.sessions_complete === chatTarget,
+          detail: `${progress.sessions_complete}/${chatTarget}`,
+        },
+        {
+          label: "IPIP",
+          complete: questionnaireCount === questionnaireTarget,
+          detail: `${questionnaireCount}/${questionnaireTarget}`,
+        },
+        {
+          label: "Accuracy",
+          complete: progress.accuracy_complete,
+          detail: `${progress.accuracy_count}/10`,
+        },
+        { label: "Submitted", complete: progress.survey_submitted },
+      ];
 
   const completedSteps = steps.filter(s => s.complete).length;
 
@@ -526,6 +616,11 @@ const ParticipantDetails = () => {
               <span className="text-xs text-primary-foreground/70">
                 ID: {participant.respondent_id}
               </span>
+              {participant.email && (
+                <span className="text-xs text-primary-foreground/70">
+                  {participant.email}
+                </span>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -590,6 +685,9 @@ const ParticipantDetails = () => {
             <CardTitle>Progress Overview</CardTitle>
             <CardDescription>
               {completedSteps} of {steps.length} steps completed
+              {participant.active_study_name
+                ? ` · ${participant.active_study_name} v${participant.active_study_version ?? 1}`
+                : ""}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -636,19 +734,17 @@ const ParticipantDetails = () => {
           </CardContent>
         </Card>
 
-        {/* Assessment-type badge */}
+        {/* Study badge */}
         <div className="flex items-center gap-2">
-          <span className="text-xs uppercase tracking-wide text-muted-foreground">Assessment:</span>
-          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-            isEcr ? "bg-amber-100 text-amber-900" : "bg-primary/10 text-primary"
-          }`}>
-            {isEcr ? "ECR-R (Attachment)" : "Big Five (IPIP)"}
+          <span className="text-xs uppercase tracking-wide text-muted-foreground">Study:</span>
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-primary/10 text-primary">
+            {participant.active_study_name ?? "No active study"}
           </span>
         </div>
 
-        {/* Assessment-specific overview */}
-        {isEcr ? (
-          <AttachmentQuadrantOverview chatScores={attachmentLlm} selfScores={attachmentSelf} />
+        {/* Study-specific overview */}
+        {isRelationshipStudy ? (
+          <AttachmentQuadrantOverview chatScores={attachmentLlm} selfScores={null} />
         ) : (
           <ComparisonOverview
             chatScores={chatScores ? {
@@ -662,234 +758,220 @@ const ParticipantDetails = () => {
           />
         )}
 
-        {/* ECR-only: attachment scores detail card */}
-        {isEcr && (attachmentLlm || attachmentSelf) && (
+        {/* Relationship project attachment summary */}
+        {isRelationshipStudy && attachmentLlm && (
           <Card>
             <CardHeader>
-              <CardTitle>Attachment Assessment Results</CardTitle>
+              <CardTitle>Relationship Pattern Summary</CardTitle>
               <CardDescription>
-                Anxiety and avoidance scores on the native ECR-R 1–7 scale. Quadrant classification uses the scale midpoint cutoff of 4.
+                Mean anxiety and avoidance estimates from repeated LLM classification runs.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {attachmentLlm && (
-                <div className="p-4 border rounded-lg space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">Chat (LLM)</span>
-                    <span className="text-xs uppercase tracking-wide text-muted-foreground">
-                      {getAttachmentStyleInfo(classifyAttachment(attachmentLlm)).label}
-                    </span>
-                  </div>
-                  <div className="text-sm text-muted-foreground">
-                    Anxiety <strong className="text-foreground">{attachmentLlm.anxiety.toFixed(2)}</strong> · Avoidance <strong className="text-foreground">{attachmentLlm.avoidance.toFixed(2)}</strong>
-                  </div>
+              <div className="p-4 border rounded-lg space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">LLM Classification</span>
+                  <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                    {getAttachmentStyleInfo(classifyAttachment(attachmentLlm)).label}
+                  </span>
                 </div>
-              )}
-              {attachmentSelf && (
-                <div className="p-4 border rounded-lg space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">ECR-R Self-Report</span>
-                    <span className="text-xs uppercase tracking-wide text-muted-foreground">
-                      {getAttachmentStyleInfo(classifyAttachment(attachmentSelf)).label}
-                    </span>
-                  </div>
-                  <div className="text-sm text-muted-foreground">
-                    Anxiety <strong className="text-foreground">{attachmentSelf.anxiety.toFixed(2)}</strong> · Avoidance <strong className="text-foreground">{attachmentSelf.avoidance.toFixed(2)}</strong>
-                  </div>
+                <div className="text-sm text-muted-foreground">
+                  Anxiety <strong className="text-foreground">{attachmentLlm.anxiety.toFixed(2)}</strong> · Avoidance{" "}
+                  <strong className="text-foreground">{attachmentLlm.avoidance.toFixed(2)}</strong>
                 </div>
-              )}
+              </div>
             </CardContent>
           </Card>
         )}
 
-        {/* Chat Assessment Results */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Chat Assessment Results</CardTitle>
-            <CardDescription>
-              Big Five scores from AI analysis of chat conversations
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {chatScores ? (
-              <div className="space-y-3">
-                {traitData.map(({ key, label }) => {
-                  const data = chatScores[key as keyof Omit<ChatScores, "overall_assessment">];
-                  const normalizedScore = (data.score / 120) * 100;
-                  const isExpanded = expandedTraits[`chat-${key}`];
-                  
-                  return (
-                    <Collapsible
-                      key={key}
-                      open={isExpanded}
-                      onOpenChange={() => toggleTrait(`chat-${key}`)}
-                    >
-                      <div className="border rounded-lg overflow-hidden">
-                        <CollapsibleTrigger className="w-full">
-                          <div className="p-4 hover:bg-muted/30 transition-colors">
-                            <div className="flex justify-between items-center mb-2">
-                              <div className="flex items-center gap-2">
-                                <span className="font-medium">{label}</span>
-                                {isExpanded ? (
-                                  <ChevronUp className="h-4 w-4 text-muted-foreground" />
-                                ) : (
-                                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
+        {!isRelationshipStudy && (
+          <>
+            {/* Chat Assessment Results */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Chat Assessment Results</CardTitle>
+                <CardDescription>
+                  Big Five scores from AI analysis of chat conversations
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {chatScores ? (
+                  <div className="space-y-3">
+                    {traitData.map(({ key, label }) => {
+                      const data = chatScores[key as keyof Omit<ChatScores, "overall_assessment">];
+                      const normalizedScore = (data.score / 120) * 100;
+                      const isExpanded = expandedTraits[`chat-${key}`];
+
+                      return (
+                        <Collapsible
+                          key={key}
+                          open={isExpanded}
+                          onOpenChange={() => toggleTrait(`chat-${key}`)}
+                        >
+                          <div className="border rounded-lg overflow-hidden">
+                            <CollapsibleTrigger className="w-full">
+                              <div className="p-4 hover:bg-muted/30 transition-colors">
+                                <div className="flex justify-between items-center mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium">{label}</span>
+                                    {isExpanded ? (
+                                      <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                                    ) : (
+                                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                                    )}
+                                  </div>
+                                  <span className="text-2xl font-medium text-primary">
+                                    {Math.round(normalizedScore)}
+                                  </span>
+                                </div>
+                                <Progress value={normalizedScore} className="h-2 bg-muted [&>div]:bg-primary" />
+                              </div>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                              <div className="px-4 pb-4 pt-0 space-y-3 border-t bg-muted/20">
+                                <div className="flex items-center gap-2 pt-3">
+                                  <span className="text-sm font-medium">Confidence:</span>
+                                  <span className="text-sm text-muted-foreground">{data.confidence}</span>
+                                </div>
+                                <p className="text-sm text-muted-foreground">{data.reasoning}</p>
+                                {data.key_evidence && data.key_evidence.length > 0 && (
+                                  <div className="text-xs">
+                                    <span className="font-medium">Evidence:</span>
+                                    <ul className="list-disc list-inside mt-1 text-muted-foreground">
+                                      {data.key_evidence.map((e, i) => (
+                                        <li key={i}>{e}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
                                 )}
                               </div>
-                              <span className="text-2xl font-medium text-primary">
-                                  {Math.round(normalizedScore)}
-                                </span>
-                            </div>
-                            <Progress value={normalizedScore} className="h-2 bg-muted [&>div]:bg-primary" />
+                            </CollapsibleContent>
                           </div>
-                        </CollapsibleTrigger>
-                        <CollapsibleContent>
-                          <div className="px-4 pb-4 pt-0 space-y-3 border-t bg-muted/20">
-                            <div className="flex items-center gap-2 pt-3">
-                              <span className="text-sm font-medium">Confidence:</span>
-                              <span className="text-sm text-muted-foreground">{data.confidence}</span>
-                            </div>
-                            <p className="text-sm text-muted-foreground">{data.reasoning}</p>
-                            {data.key_evidence && data.key_evidence.length > 0 && (
-                              <div className="text-xs">
-                                <span className="font-medium">Evidence:</span>
-                                <ul className="list-disc list-inside mt-1 text-muted-foreground">
-                                  {data.key_evidence.map((e, i) => (
-                                    <li key={i}>{e}</li>
-                                  ))}
-                                </ul>
-                              </div>
-                            )}
-                          </div>
-                        </CollapsibleContent>
+                        </Collapsible>
+                      );
+                    })}
+                    {chatScores.overall_assessment && (
+                      <div className="border-t pt-4 mt-4">
+                        <h4 className="font-medium mb-2">Overall Assessment</h4>
+                        <p className="text-sm text-muted-foreground">{chatScores.overall_assessment}</p>
                       </div>
-                    </Collapsible>
-                  );
-                })}
-                {chatScores.overall_assessment && (
-                  <div className="border-t pt-4 mt-4">
-                    <h4 className="font-medium mb-2">Overall Assessment</h4>
-                    <p className="text-sm text-muted-foreground">{chatScores.overall_assessment}</p>
+                    )}
                   </div>
+                ) : (
+                  <p className="text-muted-foreground text-sm">No chat assessment data available yet.</p>
                 )}
-              </div>
-            ) : (
-              <p className="text-muted-foreground text-sm">No chat assessment data available yet.</p>
-            )}
-          </CardContent>
-        </Card>
+              </CardContent>
+            </Card>
 
-        {/* IPIP-50 Results */}
-        <Card>
-          <CardHeader>
-            <CardTitle>IPIP-50 Assessment Results</CardTitle>
-            <CardDescription>
-              Big Five scores from standardized questionnaire responses ({progress.ipip_count}/50 items completed)
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {ipipScores ? (
-              <div className="space-y-3">
-                {traitData.map(({ key, label }) => {
-                  const score = ipipScores[key as keyof IPIPScores];
-                  
-                  return (
-                    <div key={key} className="border rounded-lg p-4">
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="font-medium">{label}</span>
-                        <span className="text-2xl font-medium text-[hsl(45,93%,47%)]">
-                          {Math.round(score)}
-                        </span>
-                      </div>
-                      <Progress value={score} className="h-2 bg-muted [&>div]:bg-[hsl(45,93%,47%)]" />
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="text-muted-foreground text-sm">No IPIP assessment data available yet.</p>
-            )}
-          </CardContent>
-        </Card>
+            {/* IPIP-50 Results */}
+            <Card>
+              <CardHeader>
+                <CardTitle>IPIP-50 Assessment Results</CardTitle>
+                <CardDescription>
+                  Big Five scores from standardized questionnaire responses ({progress.ipip_count}/50 items completed)
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {ipipScores ? (
+                  <div className="space-y-3">
+                    {traitData.map(({ key, label }) => {
+                      const score = ipipScores[key as keyof IPIPScores];
 
-        {/* Survey Results & Feedback */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Survey Results & Feedback</CardTitle>
-            <CardDescription>
-              Participant ratings and final feedback
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {surveyResults ? (
-              <div className="space-y-4">
-                {/* Overall Method Preference */}
-                <div className="border rounded-lg p-4">
-                  <p className="text-sm text-muted-foreground mb-1">Overall Method Preference</p>
-                  <p className="text-lg font-medium">
-                    {surveyResults.overall_method_preference !== null ? (
-                      {
-                        1: "Chat was much more accurate",
-                        2: "Chat was slightly more accurate",
-                        3: "Both were equally accurate",
-                        4: "IPIP was slightly more accurate",
-                        5: "IPIP was much more accurate",
-                      }[surveyResults.overall_method_preference] || `${surveyResults.overall_method_preference}/5`
-                    ) : "N/A"}
-                  </p>
-                </div>
-
-                {/* Trait-by-Trait Accuracy Ratings */}
-                <div className="border rounded-lg p-4">
-                  <p className="text-sm text-muted-foreground mb-3">Trait Accuracy Ratings (1-5)</p>
-                  <div className="grid grid-cols-1 gap-2 text-sm">
-                    {[
-                      { label: "Openness", chat: surveyResults.openness_chat_accuracy, ipip: surveyResults.openness_ipip_accuracy },
-                      { label: "Conscientiousness", chat: surveyResults.conscientiousness_chat_accuracy, ipip: surveyResults.conscientiousness_ipip_accuracy },
-                      { label: "Extraversion", chat: surveyResults.extraversion_chat_accuracy, ipip: surveyResults.extraversion_ipip_accuracy },
-                      { label: "Agreeableness", chat: surveyResults.agreeableness_chat_accuracy, ipip: surveyResults.agreeableness_ipip_accuracy },
-                      { label: "Neuroticism", chat: surveyResults.neuroticism_chat_accuracy, ipip: surveyResults.neuroticism_ipip_accuracy },
-                    ].map(({ label, chat, ipip }) => (
-                      <div key={label} className="flex items-center justify-between py-1 border-b last:border-0">
-                        <span className="font-medium">{label}</span>
-                        <div className="flex gap-4">
-                          <span className="text-primary">Chat: {chat ?? "—"}</span>
-                          <span className="text-[hsl(45,93%,47%)]">IPIP: {ipip ?? "—"}</span>
+                      return (
+                        <div key={key} className="border rounded-lg p-4">
+                          <div className="flex justify-between items-center mb-2">
+                            <span className="font-medium">{label}</span>
+                            <span className="text-2xl font-medium text-[hsl(45,93%,47%)]">
+                              {Math.round(score)}
+                            </span>
+                          </div>
+                          <Progress value={score} className="h-2 bg-muted [&>div]:bg-[hsl(45,93%,47%)]" />
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
-                </div>
+                ) : (
+                  <p className="text-muted-foreground text-sm">No IPIP assessment data available yet.</p>
+                )}
+              </CardContent>
+            </Card>
 
-                {/* Feedback */}
-                <div className="border rounded-lg p-4">
-                  <p className="text-sm text-muted-foreground mb-2">Feedback</p>
-                  <p className="text-sm">
-                    {surveyResults.feedback || "No feedback provided"}
-                  </p>
-                </div>
+            {/* Survey Results & Feedback */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Survey Results & Feedback</CardTitle>
+                <CardDescription>
+                  Participant ratings and final feedback
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {surveyResults ? (
+                  <div className="space-y-4">
+                    <div className="border rounded-lg p-4">
+                      <p className="text-sm text-muted-foreground mb-1">Overall Method Preference</p>
+                      <p className="text-lg font-medium">
+                        {surveyResults.overall_method_preference !== null ? (
+                          {
+                            1: "Chat was much more accurate",
+                            2: "Chat was slightly more accurate",
+                            3: "Both were equally accurate",
+                            4: "IPIP was slightly more accurate",
+                            5: "IPIP was much more accurate",
+                          }[surveyResults.overall_method_preference] || `${surveyResults.overall_method_preference}/5`
+                        ) : "N/A"}
+                      </p>
+                    </div>
 
-                {/* Submission Status */}
-                <div className="text-xs text-muted-foreground">
-                  {surveyResults.submitted ? (
-                    <span>Submitted: {surveyResults.submitted_at ? new Date(surveyResults.submitted_at).toLocaleString() : "Yes"}</span>
-                  ) : (
-                    <span>Not yet submitted</span>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <p className="text-muted-foreground text-sm">No survey results available yet.</p>
-            )}
-          </CardContent>
-        </Card>
+                    <div className="border rounded-lg p-4">
+                      <p className="text-sm text-muted-foreground mb-3">Trait Accuracy Ratings (1-5)</p>
+                      <div className="grid grid-cols-1 gap-2 text-sm">
+                        {[
+                          { label: "Openness", chat: surveyResults.openness_chat_accuracy, ipip: surveyResults.openness_ipip_accuracy },
+                          { label: "Conscientiousness", chat: surveyResults.conscientiousness_chat_accuracy, ipip: surveyResults.conscientiousness_ipip_accuracy },
+                          { label: "Extraversion", chat: surveyResults.extraversion_chat_accuracy, ipip: surveyResults.extraversion_ipip_accuracy },
+                          { label: "Agreeableness", chat: surveyResults.agreeableness_chat_accuracy, ipip: surveyResults.agreeableness_ipip_accuracy },
+                          { label: "Neuroticism", chat: surveyResults.neuroticism_chat_accuracy, ipip: surveyResults.neuroticism_ipip_accuracy },
+                        ].map(({ label, chat, ipip }) => (
+                          <div key={label} className="flex items-center justify-between py-1 border-b last:border-0">
+                            <span className="font-medium">{label}</span>
+                            <div className="flex gap-4">
+                              <span className="text-primary">Chat: {chat ?? "-"}</span>
+                              <span className="text-[hsl(45,93%,47%)]">IPIP: {ipip ?? "-"}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="border rounded-lg p-4">
+                      <p className="text-sm text-muted-foreground mb-2">Feedback</p>
+                      <p className="text-sm">
+                        {surveyResults.feedback || "No feedback provided"}
+                      </p>
+                    </div>
+
+                    <div className="text-xs text-muted-foreground">
+                      {surveyResults.submitted ? (
+                        <span>Submitted: {surveyResults.submitted_at ? new Date(surveyResults.submitted_at).toLocaleString() : "Yes"}</span>
+                      ) : (
+                        <span>Not yet submitted</span>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground text-sm">No survey results available yet.</p>
+                )}
+              </CardContent>
+            </Card>
+          </>
+        )}
 
         {/* Chat Transcripts - at the bottom */}
         <Card>
           <CardHeader>
             <CardTitle>Chat Transcripts</CardTitle>
             <CardDescription>
-              {chatSessions.length} of 20 conversations completed
+              {chatSessions.length} of {chatTarget} {chatTarget === 1 ? "conversation" : "conversations"} completed
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">

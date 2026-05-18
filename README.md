@@ -1,11 +1,11 @@
 # LLM Psychometrics
 
-A research web application studying whether AI chatbots can accurately estimate psychological traits through natural conversation. Participants are assigned to one of two tracks:
+A research web application studying whether AI chatbots can accurately estimate psychological traits through natural conversation. Participants are assigned to one of two versioned studies:
 
-- **Big Five track** — 20 guided chat sessions + IPIP-50 self-report. Results shown on a 5-axis radar comparing LLM-inferred vs self-reported scores.
-- **ECR-R attachment track** — a single open-ended chat about a recent relationship difficulty + ECR-R 36-item self-report. Results shown on a 2-axis anxiety × avoidance quadrant plot (Secure / Anxious-Preoccupied / Dismissive-Avoidant / Fearful-Avoidant) comparing LLM-inferred vs self-reported scores.
+- **Artificial and Natural Intelligence (LTAT.02.024) Project** — 20 guided chat sessions + IPIP-50 self-report. Results shown on a 5-axis radar comparing LLM-inferred vs self-reported scores.
+- **Natural Language Processing (LTAT.01.001) Project** — a single open-ended relationship interview, repeated LLM attachment-pattern classification, profile display, and usability/plausibility survey.
 
-Each participant is on exactly one track, set per participant via `participants.assessment_type`. New participants default to the ECR track; admins can flip individual participants to Big Five via the admin UI or during CSV import.
+Each participant is assigned to exactly one active study version via `participant_study_assignments -> study_versions -> studies`. Admins manage study assignment from the admin UI.
 
 Built as part of research at the University of Tartu.
 
@@ -13,7 +13,7 @@ Built as part of research at the University of Tartu.
 
 - **Frontend:** React 18, TypeScript, Vite, Tailwind CSS, shadcn/ui (Radix UI)
 - **Backend:** Supabase (PostgreSQL, Auth, Edge Functions)
-- **LLM:** Anthropic Claude Sonnet via Messages API
+- **LLM:** Configurable Anthropic Claude or OpenAI backend via Supabase Edge Functions
 - **State:** React Context (participant session), TanStack React Query (server state)
 - **Forms:** React Hook Form + Zod validation
 - **Charts:** Recharts (radar/bar comparison visualizations)
@@ -40,12 +40,12 @@ Built as part of research at the University of Tartu.
 │                     email/password (admins)                  │
 │  Edge Functions     chat-conversation (Big Five dialogue)    │
 │                     score-personality-unified (Big Five)     │
-│                     relationship-chat (ECR dialogue)         │
-│                     score-attachment-llm (ECR scoring)       │
+│                     relationship-chat (relationship dialogue) │
+│                     run-attachment-classification             │
 └──────────────┬──────────────────────────────────────────────┘
-               │ Anthropic Messages API
+               │ Anthropic Messages API or OpenAI Chat Completions API
 ┌──────────────▼──────────────┐
-│  Claude Sonnet 4            │
+│  Claude / OpenAI model      │
 └─────────────────────────────┘
 ```
 
@@ -155,49 +155,51 @@ Built as part of research at the University of Tartu.
 
 ## Edge Functions
 
-### `chat-conversation` (Big Five track)
+### `chat-conversation` (Artificial and Natural Intelligence project)
 
 Handles LLM dialogue for one of the 20 Big Five chat sessions.
 
 1. Validates JWT and verifies session ownership
 2. Retrieves conversation history from `chat_messages`
 3. Builds system prompt with trait-specific guidance (aspect, probing strategy, exit criteria)
-4. Calls Anthropic Claude Sonnet 4 via the Messages API
+4. Calls the configured LLM provider
 5. Detects `[CONVERSATION_COMPLETE]` tag to signal session end
 6. Returns cleaned response + `shouldEnd` flag
 
-### `score-personality-unified` (Big Five track)
+### `score-personality-unified` (Artificial and Natural Intelligence project)
 
 Analyzes all 20 conversation transcripts to generate Big Five personality scores.
 
 1. Retrieves all `chat_messages` for a participant
 2. Concatenates transcripts with an expert rubric (Big Five framework, 6 facets per trait, behavioral indicators)
-3. Calls Claude to generate scores on a 0–120 scale
+3. Calls the configured LLM provider to generate scores on a 0–120 scale
 4. Normalizes to 0–100 and stores in `personality_scores` (method=`llm`)
 
-### `relationship-chat` (ECR track)
+### `relationship-chat` (Natural Language Processing project)
 
 Single-session LLM dialogue eliciting attachment-relevant behaviour.
 
-1. Validates JWT + verifies session ownership + asserts `participants.assessment_type='ecr'`
+1. Validates JWT and verifies session ownership
 2. Builds a prompt around a relationship-difficulty opener and probing for anxiety/avoidance cues
-3. Calls Claude; returns cleaned response + `shouldEnd` flag
+3. Calls the configured LLM provider; returns cleaned response + `shouldEnd` flag
 
-### `score-attachment-llm` (ECR track)
+### `run-attachment-classification` (Natural Language Processing project)
 
-Reads the single ECR conversation and generates attachment scores on the native 1–7 ECR-R scale.
+Runs repeated attachment-pattern classification on the completed relationship interview.
 
-1. Validates the ECR chat session is complete
-2. Calls Claude with an ECR-R rubric (anchors at 1/4/7 for both anxiety and avoidance)
-3. Parses strict JSON output, validates `score ∈ [1,7]`
-4. Upserts to `attachment_scores` with `method='llm'` (numeric `anxiety`, `avoidance`, plus `llm_metadata` JSONB for confidence/evidence/reasoning)
+1. Validates JWT and verifies participant ownership/admin authorization
+2. Reads the completed relationship interview transcript
+3. Calls the configured LLM provider multiple times with a strict attachment-classification schema
+4. Stores individual runs and a summary in `attachment_classification_runs` and `attachment_classification_summaries`
 
 ## Admin Dashboard
 
 | Route | Component | Capabilities |
 |-------|-----------|-------------|
 | `/auth` | `Auth.tsx` | Admin email/password login with role verification |
-| `/admin` | `Admin.tsx` | Participant table with search/filter, CSV import/export, bulk enable/disable, admin account management, LLM prompt and question overviews |
+| `/admin` | `Admin.tsx` | Admin shell with two surfaces: Participants/User Management and Assessment/Study Overview |
+| `/admin/participants` | `Admin.tsx` | Participant table with search/filter, CSV import/export, bulk enable/disable, study assignment, and admin role management |
+| `/admin/studies` | `Admin.tsx` | Study/version overview for the Artificial and Natural Intelligence and Natural Language Processing projects with clickable study blocks and draft editing |
 | `/admin/participant/:id` | `ParticipantDetails.tsx` | Individual participant data: consent status, chat transcripts, IPIP responses, personality scores, accuracy ratings |
 
 ## Scoring
@@ -210,10 +212,6 @@ Each Big Five trait is measured by 10 items (5 positive-keyed, 5 reverse-keyed).
 score = ((rawScore - 10) / 40) * 100
 ```
 
-### ECR-R (attachment self-report)
-
-The ECR-R consists of 36 items on a 7-point Likert scale (1 = Strongly Disagree, 7 = Strongly Agree). Items are presented in a random order per participant (seed persisted in `localStorage`). Anxiety = mean of items 1–18 (reverse-keyed: 9, 11). Avoidance = mean of items 19–36 (reverse-keyed: 20, 22, 26, 27, 28, 29, 30, 31, 33, 34, 35, 36). Scoring happens client-side in TypeScript and is upserted to `attachment_scores(method='self')`.
-
 Attachment style is derived from (anxiety, avoidance) using the scale midpoint (4) as a cutoff:
 
 - Low anxiety, low avoidance → Secure
@@ -223,15 +221,13 @@ Attachment style is derived from (anxiety, avoidance) using the scale midpoint (
 
 Midpoint cutoff is a conservative MVP default; sample-median cutoffs are a future enhancement once enough pilot data is collected.
 
-> ECR-R source: Fraley, R. C., Waller, N. G., & Brennan, K. A. (2000). *An item-response theory analysis of self-report measures of adult attachment.* Journal of Personality and Social Psychology, 78, 350–365.
-
 ### LLM-inferred — Big Five
 
 The `score-personality-unified` function prompts the LLM with all 20 conversation transcripts and a structured rubric (6 facets per trait, behavioral indicators). Scores are generated on a 0–120 scale and normalized to 0–100 for display.
 
 ### LLM-inferred — Attachment
 
-The `score-attachment-llm` function prompts the LLM with the single ECR conversation transcript and a rubric with anchors at 1/4/7 for each subscale. Output is native 1–7 (no scale conversion). Confidence levels reflect transcript depth; an early-exit transcript is scored with low confidence.
+The `run-attachment-classification` function prompts the LLM with the single relationship interview transcript and a rubric with anchors at 1/4/7 for anxiety and avoidance. Output is native 1–7 (no scale conversion). Confidence levels reflect transcript depth; thin or early-exit transcripts are scored with lower confidence.
 
 ## Getting Started
 
@@ -255,10 +251,15 @@ See [.env.example](.env.example) for required variables:
 | `VITE_SUPABASE_PROJECT_ID` | Supabase project ID |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase anon/public key |
 | `VITE_SUPABASE_URL` | Supabase project URL |
+| `VITE_APP_BASE_URL` | Public app origin used for copied participant links and auth redirects; falls back to the current browser origin in local development |
+
+When deploying, set the same production origin in `VITE_APP_BASE_URL` and in the Supabase Auth site/additional redirect URL settings so sign-up callbacks and copied participant links point to the active domain.
 
 Server-side (edge functions):
 
 | Variable | Description |
 |---|---|
-| `ANTHROPIC_API_KEY` | API key for the Anthropic Messages API |
+| `OPENAI_API_KEY` | API key for the OpenAI API used by the edge-function LLM adapter |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role key for elevated database access |
+
+The selected LLM backend and model are set in code in `supabase/functions/_shared/llm.ts`.

@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { generateText } from "../_shared/llm.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -31,21 +32,6 @@ function getUserIdFromJwt(authHeader: string | null): string | null {
     console.error("JWT decode error:", e);
     return null;
   }
-}
-
-function getAnthropicText(response: any): string {
-  if (!response) throw new Error("Missing Anthropic response body");
-  if (typeof response?.content?.[0]?.text === "string" && response.content[0].text.trim()) {
-    return response.content[0].text;
-  }
-  if (typeof response?.completion === "string" && response.completion.trim()) {
-    return response.completion;
-  }
-  if (typeof response?.text === "string" && response.text.trim()) {
-    return response.text;
-  }
-  console.error("Unexpected Anthropic response shape:", response);
-  throw new Error("Unexpected Anthropic response format");
 }
 
 serve(async (req) => {
@@ -125,11 +111,14 @@ serve(async (req) => {
       content: m.content
     })) || [];
 
-    // Add current user message
-    conversationHistory.push({
-      role: "user",
-      content: userMessage
-    });
+    // Add current user message only if the frontend has not already saved it.
+    const lastMessage = conversationHistory[conversationHistory.length - 1];
+    if (!(lastMessage?.role === "user" && lastMessage?.content === userMessage)) {
+      conversationHistory.push({
+        role: "user",
+        content: userMessage
+      });
+    }
 
     // Question mapping based on session number - grouped by trait (4 each)
     const questions: Record<number, { trait: string; question: string; guidance: string; criteria: string }> = {
@@ -325,33 +314,15 @@ Brief—about 2-2.5 minutes total. Opening question, then at most ONE follow-up.
 
     Begin the conversation now.`;
 
-    // Call Anthropic Messages API
-    const aiResponse = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "claude-3-5-sonnet-20241022",
-        max_tokens: 1024,
-        temperature: 0.3,
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...conversationHistory,
-        ],
-      }),
+    const completion = await generateText({
+      taskName: "chat-conversation",
+      system: systemPrompt,
+      messages: conversationHistory,
+      maxTokens: 1024,
+      temperature: 0.3,
+      models: { anthropic: "claude-3-5-sonnet-20241022" },
     });
-
-    if (!aiResponse.ok) {
-      const errorText = await aiResponse.text();
-      console.error("Anthropic API error:", aiResponse.status, errorText);
-      throw new Error(`Anthropic API error: ${aiResponse.status}`);
-    }
-
-    const aiData = await aiResponse.json();
-    const assistantMessage = getAnthropicText(aiData);
+    const assistantMessage = completion.text;
 
     // Check if conversation should end
     const hasCompletionTag = assistantMessage.includes("[CONVERSATION_COMPLETE]");

@@ -1,9 +1,22 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { generateText } from "../_shared/llm.ts"
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+}
+
+interface ChatMessageRow {
+  role: string;
+  content: string;
+  created_at: string;
+}
+
+interface CompletedChatSession {
+  big5_aspect: string | null;
+  initial_question: string | null;
+  chat_messages: ChatMessageRow[] | null;
 }
 
 // Helper to decode JWT and extract user_id
@@ -271,10 +284,10 @@ serve(async (req) => {
     }
 
     // Format conversations for the LLM
-    const conversationText = sessions.map((session: any, idx: number) => {
-      const messages = session.chat_messages
-        .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
-        .map((m: any) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+    const conversationText = (sessions as CompletedChatSession[]).map((session, idx: number) => {
+      const messages = [...(session.chat_messages ?? [])]
+        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+        .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
         .join('\n')
       
       return `
@@ -288,33 +301,17 @@ ${messages}
 
     console.log(`Scoring conversations for participant ${id}`)
 
-    // Call Anthropic Messages API
-    const aiResponse = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "claude-3-5-sonnet-20241022",
-        max_tokens: 4096,
-        temperature: 0.3,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: conversationText }
-        ],
-      }),
+    const completion = await generateText({
+      taskName: "score-personality-unified",
+      system: SYSTEM_PROMPT,
+      messages: [
+        { role: "user", content: conversationText }
+      ],
+      maxTokens: 4096,
+      temperature: 0.3,
+      models: { anthropic: "claude-3-5-sonnet-20241022" },
     })
-
-    if (!aiResponse.ok) {
-      const errorText = await aiResponse.text()
-      console.error("Anthropic API error:", aiResponse.status, errorText)
-      throw new Error(`Anthropic API error: ${aiResponse.status}`)
-    }
-
-    const aiData = await aiResponse.json()
-    let responseText = aiData.content[0].text
+    let responseText = completion.text
 
     console.log("Raw AI response:", responseText.substring(0, 200))
 

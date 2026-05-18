@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { generateText } from "../_shared/llm.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -27,21 +28,6 @@ function getUserIdFromJwt(authHeader: string | null): string | null {
     console.error("JWT decode error:", e);
     return null;
   }
-}
-
-function getAnthropicText(response: any): string {
-  if (!response) throw new Error("Missing Anthropic response body");
-  if (typeof response?.content?.[0]?.text === "string" && response.content[0].text.trim()) {
-    return response.content[0].text;
-  }
-  if (typeof response?.completion === "string" && response.completion.trim()) {
-    return response.completion;
-  }
-  if (typeof response?.text === "string" && response.text.trim()) {
-    return response.text;
-  }
-  console.error("Unexpected Anthropic response shape:", response);
-  throw new Error("Unexpected Anthropic response format");
 }
 
 // TODO(research-team): final copy for opener, probing guidance, tone, and exit
@@ -119,7 +105,7 @@ serve(async (req) => {
 
     const { data: participant, error: participantError } = await supabase
       .from("participants")
-      .select("user_id, assessment_type")
+      .select("user_id")
       .eq("id", session.participant_id)
       .single();
 
@@ -130,7 +116,7 @@ serve(async (req) => {
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
-    console.log("relationship-chat: Found participant:", { user_id: participant.user_id, assessment_type: participant.assessment_type });
+    console.log("relationship-chat: Found participant:", { user_id: participant.user_id });
 
     if (participant.user_id !== jwtUserId) {
       console.log("relationship-chat: User ID mismatch:", { participantUserId: participant.user_id, jwtUserId });
@@ -140,15 +126,7 @@ serve(async (req) => {
       );
     }
 
-    // Defence in depth: only ECR participants may use this endpoint.
-    if (participant.assessment_type !== "ecr") {
-      console.log("relationship-chat: Wrong assessment type:", participant.assessment_type);
-      return new Response(
-        JSON.stringify({ error: "Wrong assessment track for this endpoint" }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-    console.log("relationship-chat: Assessment type check passed");
+    console.log("relationship-chat: Participant ownership check passed");
 
     console.log("relationship-chat: Querying chat_messages for session:", sessionId);
     const { data: messages } = await supabase
@@ -160,50 +138,25 @@ serve(async (req) => {
     console.log("relationship-chat: Retrieved messages from DB:", messages?.length || 0);
 
     const conversationHistory = (messages ?? []).map((m) => ({ role: m.role, content: m.content }));
-    conversationHistory.push({ role: "user", content: userMessage });
+    const lastMessage = conversationHistory[conversationHistory.length - 1];
+    if (!(lastMessage?.role === "user" && lastMessage?.content === userMessage)) {
+      conversationHistory.push({ role: "user", content: userMessage });
+    }
     console.log("relationship-chat: Conversation history length:", conversationHistory.length);
 
-    console.log("relationship-chat: Calling Anthropic API");
-    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
-    console.log("relationship-chat: API key present:", !!apiKey);
-    if (!apiKey) {
-      console.log("relationship-chat: No ANTHROPIC_API_KEY set");
-      return new Response(
-        JSON.stringify({ error: "Anthropic API key not configured in Supabase environment variables" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-
     try {
-      const aiResponse = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1024,
-          temperature: 0.3,
-          system: SYSTEM_PROMPT,
-          messages: conversationHistory,
-        }),
+      console.log("relationship-chat: Calling LLM API");
+      const completion = await generateText({
+        taskName: "relationship-chat",
+        system: SYSTEM_PROMPT,
+        messages: conversationHistory,
+        maxTokens: 1024,
+        temperature: 0.3,
+        models: { anthropic: "claude-sonnet-4-20250514" },
       });
 
-      console.log("relationship-chat: Anthropic API response status:", aiResponse.status);
-      if (!aiResponse.ok) {
-        const errorText = await aiResponse.text();
-        console.error("relationship-chat: Anthropic API error response:", errorText);
-        return new Response(
-          JSON.stringify({ error: `Anthropic API error: ${aiResponse.status} - ${errorText}` }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
-      }
-
-      const aiData = await aiResponse.json();
-      console.log("relationship-chat: Anthropic response received, parsing...");
-      const assistantMessage = getAnthropicText(aiData);
+      console.log("relationship-chat: LLM response received, parsing...");
+      const assistantMessage = completion.text;
       console.log("relationship-chat: Assistant message length:", assistantMessage.length);
 
       const hasCompletionTag = assistantMessage.includes("[CONVERSATION_COMPLETE]");
@@ -215,10 +168,10 @@ serve(async (req) => {
         JSON.stringify({ response: cleanMessage, shouldEnd: hasCompletionTag }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
-    } catch (anthropicError) {
-      console.error("relationship-chat: Error in Anthropic API section:", anthropicError);
+    } catch (llmError) {
+      console.error("relationship-chat: Error in LLM API section:", llmError);
       return new Response(
-        JSON.stringify({ error: `Anthropic API error: ${anthropicError instanceof Error ? anthropicError.message : 'Unknown error'}` }),
+        JSON.stringify({ error: `LLM API error: ${llmError instanceof Error ? llmError.message : "Unknown error"}` }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }

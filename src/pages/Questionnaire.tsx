@@ -11,8 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Loader2, Trophy, Shield, ChevronLeft } from "lucide-react";
 import ParticipantHeader from "@/components/ParticipantHeader";
 import confetti from "canvas-confetti";
-import { EcrQuestionnaire } from "@/components/ecr/EcrQuestionnaire";
-import { assertNever } from "@/lib/assertNever";
+import { isRelationshipPatternsStudy } from "@/studies/registry";
 
 // Milestone messages for encouragement (at 25%, 50%, 75%)
 const MILESTONE_MESSAGES: Record<number, { title: string; message: string }> = {
@@ -83,20 +82,23 @@ const LIKERT_SCALE = [
 ];
 
 const Questionnaire = () => {
-  const { participant } = useParticipant();
-  // Route per-participant: ECR gets the 36-item ECR-R, big5 gets the existing IPIP-50.
-  // Admins with no participant default to the Big Five preview.
-  if (participant) {
-    switch (participant.assessment_type) {
-      case "ecr":
-        return <EcrQuestionnaire />;
-      case "big5":
-        break; // fall through to existing IPIP rendering below
-      default:
-        return assertNever(participant.assessment_type);
-    }
+  const { activeStudy } = useParticipant();
+  if (isRelationshipPatternsStudy(activeStudy?.slug)) {
+    return <RelationshipQuestionnaireRedirect />;
   }
   return <BigFiveQuestionnaire />;
+};
+
+const RelationshipQuestionnaireRedirect = () => {
+  const navigate = useNavigate();
+  useEffect(() => {
+    navigate("/attachment-profile", { replace: true });
+  }, [navigate]);
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/10 via-background to-secondary/10">
+      <Loader2 className="h-8 w-8 animate-spin text-primary" />
+    </div>
+  );
 };
 
 const BigFiveQuestionnaire = () => {

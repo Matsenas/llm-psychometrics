@@ -5,6 +5,35 @@ import { useParticipant } from "@/contexts/ParticipantContext";
 import { Loader2, ShieldX } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import type { Json } from "@/integrations/supabase/types";
+import type { ActiveStudy } from "@/studies/registry";
+import { isStudySlug, parseStudyConfig } from "@/studies/registry";
+import { getNextRouteForParticipant } from "@/studies/progress";
+
+interface StudyJoin {
+  id: string;
+  slug: string | null;
+  name: string | null;
+}
+
+interface StudyVersionJoin {
+  id: string;
+  version_number: number | null;
+  config: Json;
+  studies: StudyJoin | StudyJoin[] | null;
+}
+
+interface AssignmentJoin {
+  id: string;
+  status: string;
+  study_id: string;
+  study_version_id: string;
+  study_versions: StudyVersionJoin | StudyVersionJoin[] | null;
+}
+
+function firstJoin<T>(value: T | T[] | null | undefined): T | null {
+  return Array.isArray(value) ? value[0] ?? null : value ?? null;
+}
 
 const Session = () => {
   const { respondentId } = useParams<{ respondentId: string }>();
@@ -24,7 +53,7 @@ const Session = () => {
         // First, find the participant
         const { data: participant, error: fetchError } = await supabase
           .from("participants")
-          .select("id, respondent_id, name, user_id, disabled, assessment_type")
+          .select("id, respondent_id, name, email, user_id, disabled")
           .eq("respondent_id", respondentId)
           .maybeSingle();
 
@@ -51,10 +80,14 @@ const Session = () => {
               id: participant.id,
               respondent_id: participant.respondent_id,
               name: participant.name,
-              assessment_type: (participant.assessment_type as "big5" | "ecr") ?? "ecr",
             });
             const redirectPath = await checkParticipantProgress(participant.id);
             navigate(redirectPath);
+            return;
+          }
+
+          if (participant.email) {
+            setError("This participant account uses email sign-in. Please sign in with the email and password assigned by the study team.");
             return;
           }
         }
@@ -89,15 +122,14 @@ const Session = () => {
           id: participant.id,
           respondent_id: participant.respondent_id,
           name: participant.name,
-          assessment_type: (participant.assessment_type as "big5" | "ecr") ?? "ecr",
         });
 
         // Check participant progress and redirect appropriately
         const redirectPath = await checkParticipantProgress(participant.id);
         navigate(redirectPath);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("Session validation error:", err);
-        setError(err.message || "An error occurred. Please try again.");
+        setError(err instanceof Error ? err.message : "An error occurred. Please try again.");
       }
     };
 
@@ -105,60 +137,53 @@ const Session = () => {
   }, [respondentId, navigate, setParticipant]);
 
   const checkParticipantProgress = async (participantId: string): Promise<string> => {
-    // Check consent
-    const { data: consent } = await supabase
-      .from("consent_responses")
-      .select("id")
+    const activeStudy = await loadActiveStudy(participantId);
+    return getNextRouteForParticipant({ id: participantId }, activeStudy);
+  };
+
+  const loadActiveStudy = async (participantId: string): Promise<ActiveStudy | null> => {
+    const { data } = await supabase
+      .from("participant_study_assignments")
+      .select(`
+        id,
+        status,
+        study_id,
+        study_version_id,
+        study_versions (
+          id,
+          version_number,
+          config,
+          studies (
+            id,
+            slug,
+            name
+          )
+        )
+      `)
       .eq("participant_id", participantId)
-      .limit(1);
+      .eq("status", "active")
+      .order("assigned_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    if (!consent || consent.length === 0) {
-      return "/consent";
-    }
+    if (!data) return null;
 
-    // Check if any chat sessions exist (started)
-    const { data: anySessions } = await supabase
-      .from("chat_sessions")
-      .select("id")
-      .eq("participant_id", participantId)
-      .limit(1);
+    const assignment = data as AssignmentJoin;
+    const version = firstJoin(assignment.study_versions);
+    const study = firstJoin(version?.studies);
+    if (!version || !isStudySlug(study?.slug)) return null;
 
-    // If no sessions started yet, go to start page
-    if (!anySessions || anySessions.length === 0) {
-      return "/start";
-    }
-
-    // Check completed chat sessions
-    const { data: completedSessions } = await supabase
-      .from("chat_sessions")
-      .select("id")
-      .eq("participant_id", participantId)
-      .eq("is_complete", true);
-
-    const completedCount = completedSessions?.length || 0;
-
-    if (completedCount < 20) {
-      return "/chat";
-    }
-
-    // Check IPIP responses
-    const { data: ipipResponses } = await supabase
-      .from("ipip_responses")
-      .select("id")
-      .eq("participant_id", participantId);
-
-    const ipipCount = ipipResponses?.length || 0;
-
-    if (ipipCount === 0) {
-      return "/transition";
-    }
-
-    if (ipipCount < 50) {
-      return "/questionnaire";
-    }
-
-    // All done, go to results
-    return "/results";
+    const config = parseStudyConfig(version.config, study.slug);
+    return {
+      assignmentId: assignment.id,
+      assignmentStatus: assignment.status,
+      studyId: assignment.study_id,
+      studyVersionId: assignment.study_version_id,
+      slug: study.slug,
+      name: study.name ?? study.slug,
+      version: version.version_number ?? config.version,
+      config,
+    };
   };
 
   if (isDisabled) {

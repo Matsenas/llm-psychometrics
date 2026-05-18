@@ -28,7 +28,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { EcrChatRunner } from "@/components/ecr/EcrChatRunner";
-import { assertNever } from "@/lib/assertNever";
+import { isRelationshipPatternsStudy } from "@/studies/registry";
 
 // Milestone messages for encouragement
 const MILESTONE_MESSAGES: Record<number, { title: string; message: string }> = {
@@ -74,16 +74,9 @@ const BIG5_QUESTIONS = [
 const MIN_MESSAGES_TO_SKIP = 2;
 
 const Chat = () => {
-  const { participant } = useParticipant();
-  if (participant) {
-    switch (participant.assessment_type) {
-      case "ecr":
-        return <EcrChatRunner />;
-      case "big5":
-        break; // fall through to the existing Big Five runner below
-      default:
-        return assertNever(participant.assessment_type);
-    }
+  const { activeStudy } = useParticipant();
+  if (isRelationshipPatternsStudy(activeStudy?.slug)) {
+    return <EcrChatRunner />;
   }
   return <BigFiveChat />;
 };
@@ -222,10 +215,10 @@ const BigFiveChat = () => {
           content: questionData.question,
         });
       }
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Error",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Unable to start chat session.",
         variant: "destructive",
       });
     }
@@ -294,7 +287,7 @@ const BigFiveChat = () => {
           });
         }
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error("Chat error:", error);
       setLastFailedMessage(messageToSend);
       toast({
@@ -338,7 +331,7 @@ const BigFiveChat = () => {
     if (!sessionId) return;
 
     try {
-      // Mark as complete but completion_criteria_met remains false (tracks skip)
+      // Mark as complete but completion_criteria_met remains false for skipped sessions.
       await supabase
         .from("chat_sessions")
         .update({ 
@@ -349,10 +342,10 @@ const BigFiveChat = () => {
         .eq("id", sessionId);
 
       handleContinue();
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Error",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Unable to skip this session.",
         variant: "destructive",
       });
     }
@@ -384,10 +377,10 @@ const BigFiveChat = () => {
         title: "Session Refreshed",
         description: "Chat session has been reset",
       });
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Error",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Unable to refresh this session.",
         variant: "destructive",
       });
     }

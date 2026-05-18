@@ -1,10 +1,13 @@
-import type { AttachmentScore } from "@/lib/ecrScoring";
-
 export type AttachmentStyle =
   | "secure"
   | "anxious_preoccupied"
   | "dismissive_avoidant"
   | "fearful_avoidant";
+
+export interface AttachmentScore {
+  anxiety: number;
+  avoidance: number;
+}
 
 /**
  * Scale midpoint; anything strictly below is "low", anything at or above is "high".

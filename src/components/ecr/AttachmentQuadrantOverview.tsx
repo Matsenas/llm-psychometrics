@@ -72,7 +72,7 @@ const QUADRANTS: Array<{
 ];
 
 function scoreToPercent(score: number): number {
-  // ECR scale 1..7 → 0..100
+  // Attachment score scale 1..7 -> 0..100.
   return ((score - 1) / 6) * 100;
 }
 
@@ -95,7 +95,7 @@ const AttachmentQuadrantOverview = ({ chatScores, selfScores }: Props) => {
         <CardTitle>Attachment Overview</CardTitle>
         <CardDescription>
           {hasAny
-            ? `Anxiety (horizontal) × Avoidance (vertical). Midpoint cutoff at ${ATTACHMENT_CUTOFF}. Chat (blue) vs ECR-R self-report (gold).`
+            ? `Anxiety (horizontal) × Avoidance (vertical). Midpoint cutoff at ${ATTACHMENT_CUTOFF}.`
             : "No assessment data available yet."}
         </CardDescription>
       </CardHeader>
@@ -200,7 +200,7 @@ const AttachmentQuadrantOverview = ({ chatScores, selfScores }: Props) => {
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
                       <div className="w-3 h-3 rounded-full" style={{ backgroundColor: SELF_COLOR }} />
-                      <span className="text-sm font-medium">ECR-R Self-Report</span>
+                      <span className="text-sm font-medium">Self-Report</span>
                     </div>
                     <span className="text-xs uppercase tracking-wide text-muted-foreground">
                       {getAttachmentStyleInfo(selfStyle).label}

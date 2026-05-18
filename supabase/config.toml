@@ -9,5 +9,11 @@ verify_jwt = true
 [functions.relationship-chat]
 verify_jwt = true
 
-[functions.score-attachment-llm]
+[functions.run-attachment-classification]
+verify_jwt = true
+
+[functions.admin-create-user]
+verify_jwt = true
+
+[functions.admin-delete-user]
 verify_jwt = true

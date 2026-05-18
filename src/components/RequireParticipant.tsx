@@ -2,22 +2,18 @@ import { ReactNode } from "react";
 import { Loader2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { useParticipant } from "@/contexts/ParticipantContext";
-import type { AssessmentType } from "@/contexts/ParticipantContext";
 
 interface LoadedParticipant {
   id: string;
   respondent_id: string;
   name: string | null;
   disabled?: boolean;
-  assessment_type: AssessmentType;
 }
 
 interface RequireParticipantProps {
   children: (participant: LoadedParticipant) => ReactNode;
   /** If true, render children with a synthetic admin-preview participant when no real one exists. */
   allowAdminPreview?: boolean;
-  /** Fallback assessment_type for admin preview mode. Defaults to "big5". */
-  adminPreviewAssessment?: AssessmentType;
 }
 
 /**
@@ -28,7 +24,6 @@ interface RequireParticipantProps {
 export function RequireParticipant({
   children,
   allowAdminPreview = false,
-  adminPreviewAssessment = "big5",
 }: RequireParticipantProps) {
   const { participant, isLoading } = useParticipant();
 
@@ -46,7 +41,6 @@ export function RequireParticipant({
         id: "admin-preview",
         respondent_id: "admin-preview",
         name: "Admin preview",
-        assessment_type: adminPreviewAssessment,
       };
       return <>{children(previewParticipant)}</>;
     }
@@ -64,4 +58,3 @@ export function RequireParticipant({
 
   return <>{children(participant)}</>;
 }
-

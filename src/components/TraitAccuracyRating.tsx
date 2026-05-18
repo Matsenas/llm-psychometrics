@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, type CSSProperties } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
@@ -21,6 +21,8 @@ const RATING_LABELS = {
   4: "Quite accurate",
   5: "Very accurate",
 };
+
+type ProgressStyle = CSSProperties & { "--progress-background": string };
 
 export interface TraitRatings {
   openness_chat_accuracy: number | null;
@@ -158,10 +160,7 @@ const TraitAccuracyRating = ({
         <Progress 
           value={score} 
           className="h-2 bg-progress-track"
-          style={{ 
-            // @ts-ignore
-            '--progress-background': methodColor 
-          }}
+          style={{ "--progress-background": methodColor } as ProgressStyle}
         />
 
         <div className="pt-2">

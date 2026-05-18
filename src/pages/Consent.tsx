@@ -8,6 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { isRelationshipPatternsStudy } from "@/studies/registry";
 
 const CONSENT_TEXT = `Informed consent for participation in research study on AI-based personality assessment.`;
 
@@ -20,7 +21,8 @@ const Consent = () => {
   const [checkingAdmin, setCheckingAdmin] = useState(true);
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { participant, isLoading } = useParticipant();
+  const { participant, isLoading, activeStudy } = useParticipant();
+  const isRelationshipStudy = isRelationshipPatternsStudy(activeStudy?.slug);
 
   useEffect(() => {
     checkAdminStatus();
@@ -132,10 +134,10 @@ const Consent = () => {
       });
 
       navigate("/start");
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Error",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Unable to save consent.",
         variant: "destructive",
       });
     } finally {
@@ -181,9 +183,9 @@ const Consent = () => {
             <AccordionItem value="study-purpose">
               <AccordionTrigger className="text-base font-medium">Study Purpose</AccordionTrigger>
               <AccordionContent className="text-sm text-muted-foreground leading-relaxed">
-                We're researching whether AI chatbots can accurately estimate personality traits through conversation.
-                You'll chat with an AI, complete a personality questionnaire, and rate the AI's accuracy. This helps us
-                understand if conversational AI can estimate Big Five personality traits.
+                {isRelationshipStudy
+                  ? "We're researching how consistently an AI system can conduct a relationship-pattern interview and whether participants find the system usable and its output plausible."
+                  : "We're researching whether AI chatbots can accurately estimate personality traits through conversation. You'll chat with an AI, complete a personality questionnaire, and rate the AI's accuracy. This helps us understand if conversational AI can estimate Big Five personality traits."}
               </AccordionContent>
             </AccordionItem>
 
@@ -191,9 +193,19 @@ const Consent = () => {
               <AccordionTrigger className="text-base font-medium">What You'll Do</AccordionTrigger>
               <AccordionContent className="text-sm text-muted-foreground leading-relaxed">
                 <ul className="list-disc pl-5 space-y-2">
-                  <li>Complete 20 brief conversations with an AI chatbot on different topics</li>
-                  <li>Take the standardized IPIP-50 personality questionnaire</li>
-                  <li>Rate how accurate you think the AI's assessment was</li>
+                  {isRelationshipStudy ? (
+                    <>
+                      <li>Complete one 10-15 minute conversation with an AI interviewer about relationship patterns</li>
+                      <li>View an experimental attachment-related profile generated from the transcript</li>
+                      <li>Complete CUQ, SUS, and plausibility ratings about the system and output</li>
+                    </>
+                  ) : (
+                    <>
+                      <li>Complete 20 brief conversations with an AI chatbot on different topics</li>
+                      <li>Take the standardized IPIP-50 personality questionnaire</li>
+                      <li>Rate how accurate you think the AI's assessment was</li>
+                    </>
+                  )}
                 </ul>
               </AccordionContent>
             </AccordionItem>
@@ -203,8 +215,8 @@ const Consent = () => {
               <AccordionContent className="text-sm text-muted-foreground leading-relaxed">
                 <ul className="list-disc pl-5 space-y-2">
                   <li>Conversation transcripts with the AI</li>
-                  <li>Your IPIP-50 questionnaire responses</li>
-                  <li>Your ratings on the results</li>
+                  <li>{isRelationshipStudy ? "Your CUQ, SUS, plausibility, and optional feedback responses" : "Your IPIP-50 questionnaire responses"}</li>
+                  <li>{isRelationshipStudy ? "The AI-generated profile and classifier run metadata" : "Your ratings on the results"}</li>
                   <li>Basic demographics and email from your registration form</li>
                 </ul>
               </AccordionContent>
@@ -216,8 +228,9 @@ const Consent = () => {
                 <ul className="list-disc pl-5 space-y-2">
                   <li>Research analysis for this study</li>
                   <li>
-                    Possible publication of anonymized, aggregate results in our report: "Human-AI Collaboration in
-                    Self-Understanding: Validating LLM-Based Personality Profiling"
+                    {isRelationshipStudy
+                      ? "Possible publication of anonymized, aggregate results in our report on LLM-conducted conversational interviews"
+                      : 'Possible publication of anonymized, aggregate results in our report: "Human-AI Collaboration in Self-Understanding: Validating LLM-Based Personality Profiling"'}
                   </li>
                   <li>Disguised conversation excerpts may be quoted in publications</li>
                   <li>Conversations will be processed automatically but may be partially human-reviewed</li>

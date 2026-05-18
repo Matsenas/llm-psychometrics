@@ -10,10 +10,197 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "13.0.5"
+    PostgrestVersion: "14.5"
+  }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
   }
   public: {
     Tables: {
+      admin_role_events: {
+        Row: {
+          action: string
+          actor_user_id: string | null
+          created_at: string
+          id: string
+          reason: string | null
+          target_user_id: string
+        }
+        Insert: {
+          action: string
+          actor_user_id?: string | null
+          created_at?: string
+          id?: string
+          reason?: string | null
+          target_user_id: string
+        }
+        Update: {
+          action?: string
+          actor_user_id?: string | null
+          created_at?: string
+          id?: string
+          reason?: string | null
+          target_user_id?: string
+        }
+        Relationships: []
+      }
+      attachment_classification_runs: {
+        Row: {
+          anxiety: number | null
+          avoidance: number | null
+          chat_session_id: string
+          confidence: Json
+          created_at: string
+          error_message: string | null
+          id: string
+          key_evidence: Json
+          model: string
+          narrative: string | null
+          participant_id: string
+          prototype: string | null
+          raw_response: Json | null
+          run_batch: number
+          run_number: number
+          status: string
+          temperature: number | null
+        }
+        Insert: {
+          anxiety?: number | null
+          avoidance?: number | null
+          chat_session_id: string
+          confidence?: Json
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          key_evidence?: Json
+          model: string
+          narrative?: string | null
+          participant_id: string
+          prototype?: string | null
+          raw_response?: Json | null
+          run_batch?: number
+          run_number: number
+          status?: string
+          temperature?: number | null
+        }
+        Update: {
+          anxiety?: number | null
+          avoidance?: number | null
+          chat_session_id?: string
+          confidence?: Json
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          key_evidence?: Json
+          model?: string
+          narrative?: string | null
+          participant_id?: string
+          prototype?: string | null
+          raw_response?: Json | null
+          run_batch?: number
+          run_number?: number
+          status?: string
+          temperature?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "attachment_classification_runs_chat_session_id_fkey"
+            columns: ["chat_session_id"]
+            isOneToOne: false
+            referencedRelation: "chat_sessions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "attachment_classification_runs_participant_id_fkey"
+            columns: ["participant_id"]
+            isOneToOne: false
+            referencedRelation: "participants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      attachment_classification_summaries: {
+        Row: {
+          chat_session_id: string
+          completed_runs: number
+          created_at: string
+          displayed_narrative: string | null
+          id: string
+          mean_anxiety: number
+          mean_avoidance: number
+          modal_prototype: string
+          participant_id: string
+          run_batch: number
+          sd_anxiety: number
+          sd_avoidance: number
+        }
+        Insert: {
+          chat_session_id: string
+          completed_runs?: number
+          created_at?: string
+          displayed_narrative?: string | null
+          id?: string
+          mean_anxiety: number
+          mean_avoidance: number
+          modal_prototype: string
+          participant_id: string
+          run_batch?: number
+          sd_anxiety?: number
+          sd_avoidance?: number
+        }
+        Update: {
+          chat_session_id?: string
+          completed_runs?: number
+          created_at?: string
+          displayed_narrative?: string | null
+          id?: string
+          mean_anxiety?: number
+          mean_avoidance?: number
+          modal_prototype?: string
+          participant_id?: string
+          run_batch?: number
+          sd_anxiety?: number
+          sd_avoidance?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "attachment_classification_summaries_chat_session_id_fkey"
+            columns: ["chat_session_id"]
+            isOneToOne: false
+            referencedRelation: "chat_sessions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "attachment_classification_summaries_participant_id_fkey"
+            columns: ["participant_id"]
+            isOneToOne: false
+            referencedRelation: "participants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       attachment_scores: {
         Row: {
           anxiety: number
@@ -45,38 +232,6 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "attachment_scores_participant_id_fkey"
-            columns: ["participant_id"]
-            isOneToOne: false
-            referencedRelation: "participants"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      ecr_responses: {
-        Row: {
-          id: string
-          item_number: number
-          participant_id: string
-          responded_at: string
-          response_value: number
-        }
-        Insert: {
-          id?: string
-          item_number: number
-          participant_id: string
-          responded_at?: string
-          response_value: number
-        }
-        Update: {
-          id?: string
-          item_number?: number
-          participant_id?: string
-          responded_at?: string
-          response_value?: number
-        }
-        Relationships: [
-          {
-            foreignKeyName: "ecr_responses_participant_id_fkey"
             columns: ["participant_id"]
             isOneToOne: false
             referencedRelation: "participants"
@@ -230,31 +385,95 @@ export type Database = {
           },
         ]
       }
+      participant_study_assignments: {
+        Row: {
+          assigned_at: string
+          assigned_by_user_id: string | null
+          completed_at: string | null
+          id: string
+          participant_id: string
+          started_at: string | null
+          status: string
+          study_id: string
+          study_version_id: string
+        }
+        Insert: {
+          assigned_at?: string
+          assigned_by_user_id?: string | null
+          completed_at?: string | null
+          id?: string
+          participant_id: string
+          started_at?: string | null
+          status?: string
+          study_id: string
+          study_version_id: string
+        }
+        Update: {
+          assigned_at?: string
+          assigned_by_user_id?: string | null
+          completed_at?: string | null
+          id?: string
+          participant_id?: string
+          started_at?: string | null
+          status?: string
+          study_id?: string
+          study_version_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "participant_study_assignments_participant_id_fkey"
+            columns: ["participant_id"]
+            isOneToOne: false
+            referencedRelation: "participants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "participant_study_assignments_study_id_fkey"
+            columns: ["study_id"]
+            isOneToOne: false
+            referencedRelation: "studies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "participant_study_assignments_study_version_id_fkey"
+            columns: ["study_version_id"]
+            isOneToOne: false
+            referencedRelation: "study_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       participants: {
         Row: {
-          assessment_type: string
           created_at: string | null
           disabled: boolean
+          email: string | null
           id: string
+          is_scripted_persona: boolean
           name: string | null
+          persona_condition: string | null
           respondent_id: string
           user_id: string | null
         }
         Insert: {
-          assessment_type?: string
           created_at?: string | null
           disabled?: boolean
+          email?: string | null
           id?: string
+          is_scripted_persona?: boolean
           name?: string | null
+          persona_condition?: string | null
           respondent_id: string
           user_id?: string | null
         }
         Update: {
-          assessment_type?: string
           created_at?: string | null
           disabled?: boolean
+          email?: string | null
           id?: string
+          is_scripted_persona?: boolean
           name?: string | null
+          persona_condition?: string | null
           respondent_id?: string
           user_id?: string | null
         }
@@ -312,21 +531,146 @@ export type Database = {
           created_at: string | null
           email: string
           id: string
+          name: string | null
           updated_at: string | null
         }
         Insert: {
           created_at?: string | null
           email: string
           id: string
+          name?: string | null
           updated_at?: string | null
         }
         Update: {
           created_at?: string | null
           email?: string
           id?: string
+          name?: string | null
           updated_at?: string | null
         }
         Relationships: []
+      }
+      studies: {
+        Row: {
+          created_at: string
+          description: string | null
+          id: string
+          is_active: boolean
+          name: string
+          slug: string
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_active?: boolean
+          name: string
+          slug: string
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          slug?: string
+        }
+        Relationships: []
+      }
+      study_block_progress: {
+        Row: {
+          assignment_id: string
+          block_id: string
+          block_type: string
+          completed_at: string | null
+          id: string
+          metadata: Json
+          started_at: string | null
+          status: string
+        }
+        Insert: {
+          assignment_id: string
+          block_id: string
+          block_type: string
+          completed_at?: string | null
+          id?: string
+          metadata?: Json
+          started_at?: string | null
+          status?: string
+        }
+        Update: {
+          assignment_id?: string
+          block_id?: string
+          block_type?: string
+          completed_at?: string | null
+          id?: string
+          metadata?: Json
+          started_at?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_block_progress_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "participant_study_assignments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      study_versions: {
+        Row: {
+          change_note: string | null
+          config: Json
+          created_at: string
+          created_by_user_id: string | null
+          id: string
+          is_published: boolean
+          published_at: string | null
+          study_id: string
+          supersedes_version_id: string | null
+          version_number: number
+        }
+        Insert: {
+          change_note?: string | null
+          config: Json
+          created_at?: string
+          created_by_user_id?: string | null
+          id?: string
+          is_published?: boolean
+          published_at?: string | null
+          study_id: string
+          supersedes_version_id?: string | null
+          version_number: number
+        }
+        Update: {
+          change_note?: string | null
+          config?: Json
+          created_at?: string
+          created_by_user_id?: string | null
+          id?: string
+          is_published?: boolean
+          published_at?: string | null
+          study_id?: string
+          supersedes_version_id?: string | null
+          version_number?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_versions_study_id_fkey"
+            columns: ["study_id"]
+            isOneToOne: false
+            referencedRelation: "studies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "study_versions_supersedes_version_id_fkey"
+            columns: ["supersedes_version_id"]
+            isOneToOne: false
+            referencedRelation: "study_versions"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       survey_results: {
         Row: {
@@ -382,6 +726,10 @@ export type Database = {
         Update: {
           agreeableness_chat_accuracy?: number | null
           agreeableness_ipip_accuracy?: number | null
+          anxiety_chat_accuracy?: number | null
+          anxiety_self_accuracy?: number | null
+          avoidance_chat_accuracy?: number | null
+          avoidance_self_accuracy?: number | null
           chat_rating?: number | null
           conscientiousness_chat_accuracy?: number | null
           conscientiousness_ipip_accuracy?: number | null
@@ -405,6 +753,47 @@ export type Database = {
             foreignKeyName: "survey_results_participant_id_fkey"
             columns: ["participant_id"]
             isOneToOne: true
+            referencedRelation: "participants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      usability_responses: {
+        Row: {
+          id: string
+          instrument: string
+          item_key: string
+          item_text: string | null
+          participant_id: string
+          responded_at: string
+          response_text: string | null
+          response_value: number | null
+        }
+        Insert: {
+          id?: string
+          instrument: string
+          item_key: string
+          item_text?: string | null
+          participant_id: string
+          responded_at?: string
+          response_text?: string | null
+          response_value?: number | null
+        }
+        Update: {
+          id?: string
+          instrument?: string
+          item_key?: string
+          item_text?: string | null
+          participant_id?: string
+          responded_at?: string
+          response_text?: string | null
+          response_value?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "usability_responses_participant_id_fkey"
+            columns: ["participant_id"]
+            isOneToOne: false
             referencedRelation: "participants"
             referencedColumns: ["id"]
           },
@@ -576,6 +965,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       app_role: ["admin", "user"],

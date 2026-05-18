@@ -6,10 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MessageCircle, Lightbulb, Clock, Loader2, Shield } from "lucide-react";
 import ParticipantHeader from "@/components/ParticipantHeader";
+import { isRelationshipPatternsStudy } from "@/studies/registry";
 
 const Start = () => {
   const navigate = useNavigate();
-  const { participant, isLoading } = useParticipant();
+  const { participant, isLoading, activeStudy } = useParticipant();
   const [isAdmin, setIsAdmin] = useState(false);
   const [checkingAdmin, setCheckingAdmin] = useState(true);
 
@@ -84,6 +85,8 @@ const Start = () => {
     navigate("/chat");
   };
 
+  const isRelationshipStudy = isRelationshipPatternsStudy(activeStudy?.slug);
+
   if (isLoading || checkingAdmin) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/10 via-background to-secondary/10">
@@ -130,8 +133,9 @@ const Start = () => {
           <CardContent className="space-y-6">
             <div className="prose prose-sm max-w-none text-muted-foreground">
               <p className="text-center">
-                This experiment starts with 20 short conversations with an AI assistant about everyday situations,
-                preferences, and how you typically respond to things.
+                {isRelationshipStudy
+                  ? "This study starts with one conversation with an AI interviewer about relationship patterns, closeness, conflict, and how people respond when connection feels difficult."
+                  : "This experiment starts with 20 short conversations with an AI assistant about everyday situations, preferences, and how you typically respond to things."}
               </p>
             </div>
 
@@ -141,10 +145,10 @@ const Start = () => {
                 <div className="space-y-2">
                   <h3 className="font-semibold text-lg">Tips for the Conversations</h3>
                   <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
-                    <li>Be honest and open — there are no right or wrong answers</li>
+                    <li>{isRelationshipStudy ? "You may answer honestly or fabricate responses — the study evaluates the system" : "Be honest and open — there are no right or wrong answers"}</li>
                     <li>Respond naturally, as you would in a casual conversation</li>
-                    <li>Share real examples from your life when relevant</li>
-                    <li>Each conversation is brief, so don't overthink it</li>
+                    <li>{isRelationshipStudy ? "Avoid sharing anything you would not want stored in a research transcript" : "Share real examples from your life when relevant"}</li>
+                    <li>{isRelationshipStudy ? "The interviewer will avoid clinical labels and will wrap up naturally" : "Each conversation is brief, so don't overthink it"}</li>
                   </ul>
                 </div>
               </div>
@@ -156,8 +160,9 @@ const Start = () => {
                 <div className="space-y-2">
                   <h3 className="font-semibold text-lg">Time Estimate</h3>
                   <p className="text-sm text-muted-foreground">
-                    The full experiment takes approximately 1 hour and 15 minutes. You can pause and return without
-                    losing your progress. However, we recommend completing this in one sitting.
+                    {isRelationshipStudy
+                      ? "The full study takes approximately 20-25 minutes: 10-15 minutes for the interview and about 5-10 minutes for follow-up ratings."
+                      : "The full experiment takes approximately 1 hour and 15 minutes. You can pause and return without losing your progress. However, we recommend completing this in one sitting."}
                   </p>
                 </div>
               </div>
@@ -165,7 +170,7 @@ const Start = () => {
 
             <div className="text-center pt-4">
               <Button onClick={handleStart} size="lg" className="min-w-[200px]">
-                Start Conversations
+                {isRelationshipStudy ? "Start Interview" : "Start Conversations"}
               </Button>
             </div>
           </CardContent>

@@ -11,8 +11,10 @@ import { Loader2, CheckCircle } from "lucide-react";
 import ParticipantHeader from "@/components/ParticipantHeader";
 import { Textarea } from "@/components/ui/textarea";
 import ComparisonOverview from "@/components/ComparisonOverview";
-import AttachmentQuadrantOverview from "@/components/ecr/AttachmentQuadrantOverview";
-import { assertNever } from "@/lib/assertNever";
+import { CUQ_ITEMS, SUS_ITEMS, PLAUSIBILITY_ITEM } from "@/lib/usabilityInstruments";
+import { scoreCuq, scoreSus } from "@/lib/usabilityScoring";
+import { isRelationshipPatternsStudy } from "@/studies/registry";
+import { bigFiveScoresFromJson, messageFromError, normalizeBigFiveLlmScores } from "@/lib/bigFiveScoreJson";
 
 interface ScoresData {
   chatScores: {
@@ -31,6 +33,13 @@ interface ScoresData {
   };
 }
 
+interface MissingDataState {
+  title: string;
+  description: string;
+  actionLabel: string;
+  actionPath: string;
+}
+
 const PREFERENCE_LABELS = {
   1: "Chat was much more accurate",
   2: "Chat was slightly more accurate",
@@ -40,18 +49,32 @@ const PREFERENCE_LABELS = {
 };
 
 const Results = () => {
-  const { participant } = useParticipant();
-  if (participant) {
-    switch (participant.assessment_type) {
-      case "ecr":
-        return <EcrResults />;
-      case "big5":
-        break;
-      default:
-        return assertNever(participant.assessment_type);
-    }
+  const { activeStudy } = useParticipant();
+  if (isRelationshipPatternsStudy(activeStudy?.slug)) {
+    return <RelationshipResults />;
   }
   return <BigFiveResults />;
+};
+
+const MissingDataCard = ({ data }: { data: MissingDataState }) => {
+  const navigate = useNavigate();
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-primary/10 via-background to-secondary/10 p-4">
+      <div className="max-w-2xl mx-auto space-y-6">
+        <ParticipantHeader />
+        <Card>
+          <CardHeader>
+            <CardTitle>{data.title}</CardTitle>
+            <CardDescription>{data.description}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button onClick={() => navigate(data.actionPath)}>{data.actionLabel}</Button>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
 };
 
 const BigFiveResults = () => {
@@ -60,6 +83,7 @@ const BigFiveResults = () => {
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [scoresData, setScoresData] = useState<ScoresData | null>(null);
+  const [missingData, setMissingData] = useState<MissingDataState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
   const [checkingAdmin, setCheckingAdmin] = useState(true);
@@ -101,6 +125,7 @@ const BigFiveResults = () => {
 
     try {
       setIsLoading(true);
+      setMissingData(null);
 
       // Load survey results and personality scores in parallel
       const [surveyResultRes, llmScoresRes, ipipScoresRes] = await Promise.all([
@@ -139,42 +164,32 @@ const BigFiveResults = () => {
       }
 
       // Get LLM scores from personality_scores (normalized to 0-100)
-      let chatScoresData = {
-        openness: 0,
-        conscientiousness: 0,
-        extraversion: 0,
-        agreeableness: 0,
-        neuroticism: 0,
-      };
-      if (llmScoresRes.data) {
-        const llm = llmScoresRes.data;
-        chatScoresData = {
-          openness: ((llm.openness as any).score / 120) * 100,
-          conscientiousness: ((llm.conscientiousness as any).score / 120) * 100,
-          extraversion: ((llm.extraversion as any).score / 120) * 100,
-          agreeableness: ((llm.agreeableness as any).score / 120) * 100,
-          neuroticism: ((llm.neuroticism as any).score / 120) * 100,
-        };
+      if (!llmScoresRes.data) {
+        setMissingData({
+          title: "Results Not Ready",
+          description:
+            "AI personality scores are not available yet, so the final feedback questions cannot be shown.",
+          actionLabel: "Return to Accuracy",
+          actionPath: "/accuracy",
+        });
+        setScoresData(null);
+        return;
       }
+      const chatScoresData = normalizeBigFiveLlmScores(bigFiveScoresFromJson(llmScoresRes.data));
 
       // Get IPIP scores from personality_scores
-      let ipipScoresData = {
-        openness: 0,
-        conscientiousness: 0,
-        extraversion: 0,
-        agreeableness: 0,
-        neuroticism: 0,
-      };
-      if (ipipScoresRes.data) {
-        const ipip = ipipScoresRes.data;
-        ipipScoresData = {
-          openness: (ipip.openness as any).score,
-          conscientiousness: (ipip.conscientiousness as any).score,
-          extraversion: (ipip.extraversion as any).score,
-          agreeableness: (ipip.agreeableness as any).score,
-          neuroticism: (ipip.neuroticism as any).score,
-        };
+      if (!ipipScoresRes.data) {
+        setMissingData({
+          title: "Results Not Ready",
+          description:
+            "Big Five questionnaire scores are not available yet, so the final feedback questions cannot be shown.",
+          actionLabel: "Return to Accuracy",
+          actionPath: "/accuracy",
+        });
+        setScoresData(null);
+        return;
       }
+      const ipipScoresData = bigFiveScoresFromJson(ipipScoresRes.data);
 
       setScoresData({
         chatScores: chatScoresData,
@@ -189,11 +204,11 @@ const BigFiveResults = () => {
         setFeedback(surveyResult.feedback);
       }
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error loading results:", error);
       toast({
         title: "Error",
-        description: error.message || "Failed to load results. Please try again.",
+        description: messageFromError(error, "Failed to load results. Please try again."),
         variant: "destructive",
       });
     } finally {
@@ -232,10 +247,10 @@ const BigFiveResults = () => {
         title: "Thank you!",
         description: "Your responses have been submitted successfully.",
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error",
-        description: error.message,
+        description: messageFromError(error, "Unknown error"),
         variant: "destructive",
       });
     } finally {
@@ -266,6 +281,25 @@ const BigFiveResults = () => {
         </Card>
       </div>
     );
+  }
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/10 via-background to-secondary/10">
+        <Card className="w-full max-w-md p-6">
+          <div className="flex flex-col items-center space-y-4">
+            <Loader2 className="h-8 w-8 animate-spin" />
+            <p className="text-center text-muted-foreground">
+              Loading results...
+            </p>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  if (missingData) {
+    return <MissingDataCard data={missingData} />;
   }
 
   if (submitted) {
@@ -301,7 +335,7 @@ const BigFiveResults = () => {
     );
   }
 
-  if (isLoading || !scoresData) {
+  if (!scoresData) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/10 via-background to-secondary/10">
         <Card className="w-full max-w-md p-6">
@@ -385,96 +419,67 @@ const BigFiveResults = () => {
   );
 };
 
-const ECR_PREFERENCE_LABELS: Record<number, string> = {
-  1: "Chat was much more accurate",
-  2: "Chat was slightly more accurate",
-  3: "Both were equally accurate",
-  4: "Self-report was slightly more accurate",
-  5: "Self-report was much more accurate",
-};
-
-const EcrResults = () => {
-  const [overallPreference, setOverallPreference] = useState<number | null>(null);
-  const [feedback, setFeedback] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const [chatScores, setChatScores] = useState<{ anxiety: number; avoidance: number } | null>(null);
-  const [selfScores, setSelfScores] = useState<{ anxiety: number; avoidance: number } | null>(null);
+const RelationshipResults = () => {
+  const { participant, isLoading: participantLoading } = useParticipant();
   const [isLoading, setIsLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [checkingAdmin, setCheckingAdmin] = useState(true);
+  const [summary, setSummary] = useState<{
+    mean_anxiety: number;
+    mean_avoidance: number;
+    modal_prototype: string;
+    displayed_narrative: string | null;
+  } | null>(null);
+  const [scores, setScores] = useState<{ cuq: number | null; sus: number | null; plausibility: number | null }>({
+    cuq: null,
+    sus: null,
+    plausibility: null,
+  });
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { participant, isLoading: participantLoading } = useParticipant();
-
-  useEffect(() => {
-    const check = async () => {
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          const { data: roleData } = await supabase
-            .from("user_roles")
-            .select("role")
-            .eq("user_id", user.id)
-            .eq("role", "admin")
-            .maybeSingle();
-          setIsAdmin(!!roleData);
-        }
-      } finally {
-        setCheckingAdmin(false);
-      }
-    };
-    check();
-  }, []);
 
   useEffect(() => {
     if (!participant || participantLoading) return;
     const load = async () => {
       try {
         setIsLoading(true);
-        const [surveyRes, llmRes, selfRes] = await Promise.all([
+        const [summaryRes, responsesRes] = await Promise.all([
           supabase
-            .from("survey_results")
-            .select("*")
+            .from("attachment_classification_summaries")
+            .select("mean_anxiety, mean_avoidance, modal_prototype, displayed_narrative")
             .eq("participant_id", participant.id)
+            .order("created_at", { ascending: false })
+            .limit(1)
             .maybeSingle(),
           supabase
-            .from("attachment_scores")
-            .select("anxiety, avoidance")
-            .eq("participant_id", participant.id)
-            .eq("method", "llm")
-            .maybeSingle(),
-          supabase
-            .from("attachment_scores")
-            .select("anxiety, avoidance")
-            .eq("participant_id", participant.id)
-            .eq("method", "self")
-            .maybeSingle(),
+            .from("usability_responses")
+            .select("instrument, item_key, response_value")
+            .eq("participant_id", participant.id),
         ]);
 
-        if (surveyRes.error) throw surveyRes.error;
-        if (!surveyRes.data) {
-          navigate("/accuracy");
+        if (summaryRes.error) throw summaryRes.error;
+        if (responsesRes.error) throw responsesRes.error;
+        if (!summaryRes.data) {
+          navigate("/attachment-profile");
           return;
         }
-        if (surveyRes.data.submitted) setSubmitted(true);
-        if (surveyRes.data.overall_method_preference) {
-          setOverallPreference(surveyRes.data.overall_method_preference);
-        }
-        if (surveyRes.data.feedback) setFeedback(surveyRes.data.feedback);
 
-        if (llmRes.data) {
-          setChatScores({
-            anxiety: Number(llmRes.data.anxiety),
-            avoidance: Number(llmRes.data.avoidance),
-          });
-        }
-        if (selfRes.data) {
-          setSelfScores({
-            anxiety: Number(selfRes.data.anxiety),
-            avoidance: Number(selfRes.data.avoidance),
-          });
-        }
+        const responseMap: Record<string, number> = {};
+        responsesRes.data?.forEach((row) => {
+          if (typeof row.response_value === "number") {
+            responseMap[row.item_key] = row.response_value;
+          }
+        });
+
+        setSummary({
+          mean_anxiety: Number(summaryRes.data.mean_anxiety),
+          mean_avoidance: Number(summaryRes.data.mean_avoidance),
+          modal_prototype: summaryRes.data.modal_prototype,
+          displayed_narrative: summaryRes.data.displayed_narrative,
+        });
+        setScores({
+          cuq: scoreCuq(CUQ_ITEMS, responseMap),
+          sus: scoreSus(SUS_ITEMS, responseMap),
+          plausibility: responseMap[PLAUSIBILITY_ITEM.itemKey] ?? null,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to load results";
         toast({ title: "Error", description: message, variant: "destructive" });
@@ -485,42 +490,7 @@ const EcrResults = () => {
     load();
   }, [participant, participantLoading, navigate, toast]);
 
-  const handleSubmit = async () => {
-    if (!participant) return;
-    if (overallPreference === null) {
-      toast({
-        title: "Overall Preference Required",
-        description: "Please indicate which method you found more accurate overall.",
-        variant: "destructive",
-      });
-      return;
-    }
-    setLoading(true);
-    try {
-      const { error } = await supabase
-        .from("survey_results")
-        .update({
-          overall_method_preference: overallPreference,
-          feedback: feedback.trim(),
-          submitted: true,
-          submitted_at: new Date().toISOString(),
-        })
-        .eq("participant_id", participant.id);
-      if (error) throw error;
-      setSubmitted(true);
-      toast({
-        title: "Thank you!",
-        description: "Your responses have been submitted successfully.",
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      toast({ title: "Error", description: message, variant: "destructive" });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (participantLoading || checkingAdmin) {
+  if (participantLoading || isLoading || !summary) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/10 via-background to-secondary/10">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -528,118 +498,40 @@ const EcrResults = () => {
     );
   }
 
-  if (!participant && !isAdmin) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/10 via-background to-secondary/10 p-4">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle className="text-destructive">No Session Found</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-muted-foreground">
-              Please use your unique session link to access the survey.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/10 via-background to-secondary/10">
-        <Card className="w-full max-w-md p-6">
-          <div className="flex flex-col items-center space-y-4">
-            <Loader2 className="h-8 w-8 animate-spin" />
-            <p className="text-center text-muted-foreground">Loading results...</p>
-          </div>
-        </Card>
-      </div>
-    );
-  }
-
-  if (submitted) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-primary/10 via-background to-secondary/10 p-4">
-        <div className="max-w-5xl mx-auto space-y-6">
-          <ParticipantHeader hasSubmitted={true} />
-          <Card>
-            <CardHeader className="text-center">
-              <CheckCircle className="w-16 h-16 text-success mx-auto mb-4" />
-              <CardTitle className="text-2xl">Survey Complete!</CardTitle>
-              <CardDescription className="text-base">
-                Thank you for your commitment and help in our research. Your participation contributes to a better understanding of AI-based attachment assessment methods.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="text-center text-muted-foreground">You may now close this window.</p>
-            </CardContent>
-          </Card>
-          <AttachmentQuadrantOverview chatScores={chatScores} selfScores={selfScores} />
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary/10 via-background to-secondary/10 p-4">
-      <div className="max-w-5xl mx-auto space-y-6">
-        <ParticipantHeader hasSubmitted={submitted} />
-        <AttachmentQuadrantOverview chatScores={chatScores} selfScores={selfScores} />
+      <div className="max-w-3xl mx-auto space-y-6">
+        <ParticipantHeader hasSubmitted={true} />
         <Card>
-          <CardHeader>
-            <CardTitle>Final Thoughts</CardTitle>
-            <CardDescription>
-              Please share your overall impression of the two assessment methods
+          <CardHeader className="text-center">
+            <CheckCircle className="w-16 h-16 text-success mx-auto mb-4" />
+            <CardTitle className="text-2xl">Study Complete</CardTitle>
+            <CardDescription className="text-base">
+              Thank you. Your interview and usability responses have been submitted.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="space-y-3">
-              <Label className="text-base font-medium">
-                Overall, which method better captured your attachment pattern?
-              </Label>
-              <RadioGroup
-                value={overallPreference?.toString() ?? ""}
-                onValueChange={(v) => setOverallPreference(parseInt(v, 10))}
-              >
-                {[1, 2, 3, 4, 5].map((value) => (
-                  <div key={value} className="flex items-center space-x-2">
-                    <RadioGroupItem value={value.toString()} id={`ecr-preference-${value}`} />
-                    <Label htmlFor={`ecr-preference-${value}`} className="cursor-pointer">
-                      {ECR_PREFERENCE_LABELS[value]}
-                    </Label>
-                  </div>
-                ))}
-              </RadioGroup>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <ResultMetric label="CUQ" value={scores.cuq?.toFixed(1) ?? "-"} />
+              <ResultMetric label="SUS" value={scores.sus?.toFixed(1) ?? "-"} />
+              <ResultMetric label="Plausibility" value={scores.plausibility ? `${scores.plausibility}/5` : "-"} />
             </div>
-            <div className="space-y-3">
-              <Label className="text-base font-medium">Additional Feedback (Optional)</Label>
-              <Textarea
-                value={feedback}
-                onChange={(e) => setFeedback(e.target.value)}
-                placeholder="Share any thoughts about your experience..."
-                className="min-h-[100px]"
-              />
+            <div className="rounded-lg bg-muted/50 p-4 text-sm text-muted-foreground">
+              Attachment profile: {summary.modal_prototype}; Anxiety {summary.mean_anxiety.toFixed(2)}, Avoidance{" "}
+              {summary.mean_avoidance.toFixed(2)}.
             </div>
-            <Button
-              onClick={handleSubmit}
-              disabled={overallPreference === null || loading}
-              className="w-full"
-              size="lg"
-            >
-              {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Submit &amp; Complete Survey
-            </Button>
           </CardContent>
         </Card>
-        {isAdmin && !participant && (
-          <p className="text-center text-sm text-muted-foreground mt-4">
-            Admin preview mode - no participant session active
-          </p>
-        )}
       </div>
     </div>
   );
 };
+
+const ResultMetric = ({ label, value }: { label: string; value: string }) => (
+  <div className="rounded-lg bg-muted/50 p-4 text-center">
+    <p className="text-xs uppercase text-muted-foreground">{label}</p>
+    <p className="text-2xl font-semibold">{value}</p>
+  </div>
+);
 
 export default Results;

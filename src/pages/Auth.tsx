@@ -54,10 +54,10 @@ const Auth = () => {
         description: "You have successfully signed in.",
       });
       navigate("/admin");
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Error",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Unable to sign in.",
         variant: "destructive",
       });
     } finally {
